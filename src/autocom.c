@@ -1,9 +1,10 @@
 #include "autocom.h"
 #include <string.h>
+#include <unistd.h>
 
 
 #define NBUF 256            // The maximum number of bytes for buffers
-#define TIMEOUT_MS  4000    // The timeout interval in milliseconds
+#define TIMEOUT_MS  2000    // The timeout interval in milliseconds
 
 uint8_t txbuffer[NBUF];
 uint8_t rxbuffer[NBUF];
@@ -142,8 +143,7 @@ acerror_t xmit(HANDLE h, unsigned int attempts, unsigned int reply){
     txcs16 = checksum16(txbuffer, &txlength);
     // extended transmission requires cs16
     if(txcs16 >= 0){
-        txbuffer[4] = (uint8_t) (txcs16 & 0xFF);
-        txbuffer[5] = (uint8_t) txcs16 >> 8;
+        *(uint16_t*) &txbuffer[4] = (uint16_t) txcs16;
     }else if(txcs16 == -2){
         if(messages)
             fprintf(messages, "XMIT: The buffer was not correctly initialized. Aborting in the CS16 step.\n");
@@ -256,6 +256,7 @@ acerror_t acmessage(FILE* target){
  */
 acerror_t acinit(acdev_t *dev){
     acerror_t err;
+    unsigned int ii;
     
     // Test for an existing connection
     if(dev->handle){
@@ -272,6 +273,59 @@ acerror_t acinit(acdev_t *dev){
         return ACERR_OPEN_FAILED;
     }
     
+    
+    // Use the FEEDBACK command to set the EIO pin directions and states
+    // We'll turn everything on to test the LEDs and we'll turn the U3
+    // LED off to signify the test.
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 12;
+    txbuffer[3] = 0x00;
+    ii = 6;
+    txbuffer[ii++] = 0x00;  // Echo byte
+    txbuffer[ii++] = 0x0D; // Bit direction write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_ALARM + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0D; // Bit direction write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND0 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0D; // Bit direction write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND1 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0D; // Bit direction write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND2 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0D; // Bit direction write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND3 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_ALARM + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND0 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND1 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit direction write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND2 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit direction write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND3 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x09; // Turn off the LED
+    txbuffer[ii++] = 0x00;
+    txbuffer[ii++] = 0x00;
+    
+    /*
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 2;
+    txbuffer[3] = 0x00;
+    txbuffer[6] = 0x01;
+    txbuffer[7] = 0x09;
+    txbuffer[8] = 0x01;
+    txbuffer[9] = 0x00;
+    */
+    err = xmit(dev->handle,1,10);
+    if(err){
+        if(messages)
+            fprintf(messages, "ACINIT: Failed to initialize pin states.\n");
+        return err;
+    }else if(rxbuffer[6]){
+        if(messages)
+            fprintf(messages, "ACINIT: Pin initialization failed in frame %d with error code: 0x%02x\n", rxbuffer[7], rxbuffer[6]);
+        return ACERR_CONFIG_FAILED;
+    }
+    
     // Use ConfigU3 command to retrieve version information
     txbuffer[1] = 0xF8;
     txbuffer[2] = 0x0A;
@@ -286,7 +340,7 @@ acerror_t acinit(acdev_t *dev){
     }
     
     dev->firmware_version = rxbuffer[10] + ((float) rxbuffer[9]) / 100;
-    dev->bootloader_version = txbuffer[12] + ((float) rxbuffer[11]) / 100;
+    dev->bootloader_version = rxbuffer[12] + ((float) rxbuffer[11]) / 100;
     dev->hardware_version = rxbuffer[14] + ((float) rxbuffer[13]) / 100;
     dev->serial_number = *((unsigned int*) &rxbuffer[15]);
     
@@ -336,7 +390,50 @@ acerror_t acinit(acdev_t *dev){
             fprintf(messages, "ACINIT: Failed while setting the FIO/EIO IO settings.\n");
         return err;
     }
-    buffer_dump(rxbuffer);
+
+    // Finally, use the FEEDBACK command to return LEDs to their resting
+    // states.  Normally, this happens so quickly the user will not 
+    // notice, but if configuration fails, the alarm and LEDs will hang
+    // in a state to warn the user.
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 7;
+    txbuffer[3] = 0x00;
+    ii = 6;
+    txbuffer[ii++] = 0x02;  // Echo byte
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = (ACPIN_ALARM + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = (ACPIN_IND0 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = (ACPIN_IND1 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit direction write
+    txbuffer[ii++] = (ACPIN_IND2 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit direction write
+    txbuffer[ii++] = (ACPIN_IND3 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x09; // Turn on the LED
+    txbuffer[ii++] = 0x01;
+    txbuffer[ii++] = 0x00;
+    
+    /*
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 2;
+    txbuffer[3] = 0x00;
+    txbuffer[6] = 0x01;
+    txbuffer[7] = 0x09;
+    txbuffer[8] = 0x01;
+    txbuffer[9] = 0x00;
+    */
+    err = xmit(dev->handle,1,10);
+    if(err){
+        if(messages)
+            fprintf(messages, "ACINIT: Failed to set pin states.\n");
+        return err;
+    }else if(rxbuffer[6]){
+        if(messages)
+            fprintf(messages, "ACINIT: Failed to turn off LEDs in frame %d with error code: 0x%02x\n", rxbuffer[7], rxbuffer[6]);
+        return ACERR_CONFIG_FAILED;
+    }
+
     return ACERR_NONE;
 }
 

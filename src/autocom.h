@@ -1,7 +1,8 @@
 /* AUTOCOM.H
  * 
  * Header for wrapper codes to automate communication operations with 
- * the LabJack U3.
+ * the LabJack U3.  These are written to be specific to the BatMon 
+ * application.
  */
 
 
@@ -29,6 +30,9 @@ typedef enum _acpin_t {
 
 // Build an EIO Analog mask
 #define AC_EIOAIN_MASK  (1<<ACPIN_CS | 1<<ACPIN_VS)
+#define AC_EIO_OFFSET  8
+#define AC_BITSTATE_MASK  0x80
+
 
 
 /* ACERROR_T- the error code type
