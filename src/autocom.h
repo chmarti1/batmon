@@ -33,7 +33,8 @@ typedef enum _acpin_t {
 #define AC_EIO_OFFSET  8
 #define AC_BITSTATE_MASK  0x80
 
-
+#define AC_ADCCLK_HZ    15625.0
+#define AC_ADCCLK_DIVISOR
 
 /* ACERROR_T- the error code type
  *  Establishes constants for function return values
@@ -48,39 +49,173 @@ typedef enum _acerror_t {
     ACERR_RX_FAILURE =      0x14,       //   
     ACERR_RX_LENGTH =       0x15,       // Reply length was unexpected
 
+    // Configuration errors
+    ACERR_CONFIG_FILE =     0x20,       // Configuration file was not opened
+    ACERR_CONFIG_SYNTAX =   0x21,       // Illegally formatted configuration file
+    ACERR_LOG_FILE =        0x22,       // Could not open the logfile
+    ACERR_STAT_FILE =       0x23,       // Could not open the stat file
+
     // Init/Open Errors
-    ACERR_ALREADY_OPEN =    0x20,       // Init was run twice
-    ACERR_OPEN_FAILED =     0x21,       // Open operation failed
-    ACERR_CONFIG_FAILED =   0x22,       // Failed while configuring IO
+    ACERR_ALREADY_OPEN =    0x30,       // Init was run twice
+    ACERR_OPEN_FAILED =     0x31,       // Open operation failed
+    ACERR_CONFIG_FAILED =   0x32,       // Failed while configuring IO
     
 } acerror_t;
 
-
+/* ACDEV_T - The device struct
+ * 
+ *  The device struct tracks values relevant to the DAQ. Below is a list
+ * of the members, a description of their purpose, and lists of the 
+ * functions responsible for initializing, setting, and that depend on
+ * the member's value.
+ * 
+ * handle
+ *  initialized: application
+ *  set: acinit, acclose
+ *  used: all communication
+ * 
+ * The handle is a pointer used by the LJUSB driver as a device handle. 
+ * It should be set to NULL to indicate that the connection is closed. 
+ * Otherwise, it will be set to a value returned by the LJUSB_OpenDevice 
+ * function.  The application is responsible for initializing it to NULL
+ * to prevent an error in acinit().
+ * 
+ * firmware_version
+ * bootloader_version
+ * hardware_version
+ * serial_number
+ *  initialized: acinit
+ *  set: acinit
+ *  used: application
+ * 
+ * The version numbers are floating point numbers indicating the various
+ * versions reported by the U3.  The serial number is an unsigned 
+ * integer indicating the device serial number reported by the U3.
+ * These are not used by the interface, but are available to the 
+ * application if needed.
+ * 
+ * ain_slope_v
+ * ain_offset_v
+ * temp_slope_K
+ *  initialized: acinit
+ *  set: acinit
+ *  used: acstream_read
+ * 
+ * In the initialization process, the device's calibration memory is
+ * queried for its raw calibration coefficients.  These are used to 
+ * convert ADC counts into analog voltage measured at the terminals and
+ * temperature reported by the internal temperature sensor.  The U3 has
+ * separate coefficients for differential and single-ended measurements;
+ * these are for single-ended measurements.  The units are in 
+ * volts/count for slope, volts for offset, and K/count for temperature
+ * slope.
+ * 
+ * current_slope_av
+ * current_zero_v
+ * voltage_slope_nd
+ * voltage_zero_v
+ *  initialized: application
+ *  set: application
+ *  used: acstream_read
+ * 
+ * The application is responsible for setting values for 
+ */
 typedef struct _acdev_t {
+    // Device handle
     HANDLE handle;
+    // Files
+    FILE *log;
+    FILE *stat;
+    // Descriptive
     float firmware_version;
     float bootloader_version;
     float hardware_version;
     unsigned int serial_number;
+    // Calibration
+    // Device calibration
     double ain_slope_v;
     double ain_offset_v;
+    // Device temperature calibration
     double temp_slope_K;
+    // Current
+    double current_slope_av;
+    double current_zero_v;
+    // Voltage
+    double voltage_slope_nd;
+    double voltage_zero_v;
+    // flags
+    unsigned int aistr_active:1;    // (acstream)
 } acdev_t;
 
 
-
+/* ACMESSAGE - Configure a file stream for error messages
+ *  Establishes a file stream pointer for logging error messages.  Many
+ * applications may want to use stderr (especially for development) but
+ * it is also intended to be used for writing to log files.
+ */
 acerror_t acmessage(FILE* target);
 
-/* ACINIT
+acerror_t acconfig(acdev_t *dev, char *filename);
+
+/* ACINIT - Initialize the U3
  *  Opens a connection to the U3 and initializes the relevant 
- * configuration settings.
+ * configuration settings.  The process is:
+ *  (1) Configures ALARM and IND0-IND3 pins for output and 
+ *      sets all High while setting the U3 LED off
+ *  (2) Retrieves device hardware, firmware, and bootloader versions
+ *  (3) Retrieves analog calibration information
+ *  (4) Retrieves the temperature measurement calibration
+ *  (5) Sets ALARM and IND0-IND3 Low and turns the U3 LED on.
+ * If there is an error in the initialization phase and it cannot 
+ * complete, the alarm and LEDs will remain lit to warn the user.
  * 
+ * Each of these processes requires that a packet be transmitted over
+ * USB and a response packet must be received.  
+ * 
+ * For information on errors and warnings, be sure to set the messages
+ * file pointer using the ACMESSAGE() function.
+ * 
+ * The ACINIT function returns error codes:
+ * ACERR_ALREADY_OPEN
+ *      It appears that the device connection is already open. This 
+ *      means dev.handle is not NULL, so if the connection is not 
+ *      actually open, just add a line of code setting dev.handle to 
+ *      NULL.
+ * ACERR_OPEN_FAILED    
+ *      Failed to open a connection to a U3 device.
+ * ACERR_CORRUPT_BUFFER 
+ *      Some aspect of the packet being transmitted or received is 
+ *      illegally formatted.  Maybe the packet length specified in the
+ *      header is illegal, or some other aspect is unexpected.
+ * ACERR_TX_FAILED
+ * ACERR_RX_FAILED
+ *      TX and RX errors occur when either step of the transaction fails
+ *      without a clear reason.  Maybe the connection is faulty, or the
+ *      device is unresponsive?
+ * ACERR_BAD_CHECKSUM
+ *      Either the device reported a checksum error or a checksum check
+ *      on the device's response has failed.
+ * ACERR_CONFIG_FAILED
+ *      The transmission succeeded, but one of the configuration steps
+ *      returned an error code. Turn on messages with ACMESSAGE() for
+ *      more details.
  */
 acerror_t acinit(acdev_t *dev);
 
-
+/* ACCLOSE - Close the U3 connection
+ *  First, the function transmits a packet to turn off all LEDs and the
+ * alarm.  If that fails, closure is not aborted.
+ */
 acerror_t acclose(acdev_t *dev);
 
 acerror_t acshow(acdev_t *dev);
+
+acerror_t acstream_start(acdev_t *dev);
+
+acerror_t acstream_read(acdev_t *dev, double **data);
+
+acerror_t acstream_post(double *data, double *iint, double *imean, double *vmean, double *tmean);
+
+acerror_t acstream_stop(acdev_t *dev);
 
 #endif

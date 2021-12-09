@@ -4,6 +4,7 @@
 
 
 #define NBUF 256            // The maximum number of bytes for buffers
+#define NSTR 256            // The maximum length of a string
 #define TIMEOUT_MS  2000    // The timeout interval in milliseconds
 
 uint8_t txbuffer[NBUF];
@@ -13,6 +14,7 @@ FILE* messages = NULL;
 
 // HELPER ROUTINES
 
+#define streq(a,b) (strcmp(a,b) == 0)
 
 // Return a double-precision representation of a 64-bit fixed-point 
 // number in the buffer.
@@ -245,9 +247,68 @@ acerror_t acmessage(FILE* target){
     messages = target;
 }
 
-/* ACINIT - open the device connection
+acerror_t acconfig(acdev_t *dev, char *filename){
+    int result, count;
+    char param[NSTR], value[NSTR];
+    uint8_t float_flag;
+    double fvalue;
+    double *ftarget;
+    FILE *fd = NULL;
+    
+    // First, initialize the device parameters that need to be set
+    // before running acinit()
+    dev->handle = NULL;
+    dev->log = NULL;
+    dev->stat = NULL;
+    dev->current_slope_av = 0;
+    dev->current_zero_v = 0;
+    dev->voltage_slope_nd = 0;
+    dev->voltage_sero_v = 0;
+    
+    // Open the configuration file
+    fd = fopen(filename, "r");
+    if(!fd){
+        if(messages)
+            fprintf(messages, "ACCONFIG: Failed to open file: %s\n", filename);
+        return ACERR_CONFIG_FILE;
+    }
+    
+    for(count=1; !feof(fd); count++){
+        result = fscanf(fd, "%s %s", param, value);
+        
+        if(result != 2){
+            if(messages)
+                fprintf(messages, "ACCONFIG: Parameter-value pair number %d was illegal.\n", count);
+            return ACERR_CONFIG_SYNTAX;
+        }
+        
+        float_flag = 0;
+        ftarget = NULL;
+        if(streq(param, "current_slope")){
+            float_flag = 1;
+            ftarget = &dev->current_slope_av;
+        }else if(streq(param, "current_zero")){
+            float_flag = 1;
+            ftarget = &dev->current_zero_v;
+        }else if(streq(param, "voltage_slope")){
+            float_flag = 1;
+            ftarget = &dev->voltage_slope_nd;
+        }else if(streq(param, "voltage_zero")){
+            float_flag = 1;
+            ftarget = &dev->voltage_zero_v;
+        }else if(streq(param, "logfile")){
+            
+        }else if(streq(param, "statfile"))
+        
+    }
+    return ACERR_NONE;
+}
+
+/* ACINIT - initialize the device connection
  * 
- *  DEV is the device struct.  dev->handle must be set to NULL before
+ *  DEV is the ACDEV_T device struct pointer.  Before calling ACINIT,
+ * the application is responsible for initializing values of the struct
+ * dev->handle must be set to NULL before
  *  initialization, or an ACERR_ALREADY_OPEN error will be raised.
  * 
  *  Errors:
@@ -264,6 +325,9 @@ acerror_t acinit(acdev_t *dev){
             fprintf(messages, "ACINIT: Device connection appears to be already open.\n");
         return ACERR_ALREADY_OPEN;
     }
+    
+    // Force the stream active flag to false
+    dev->aistr_active = 0;
     
     // Find a U3; it should be the only LJ device.
     dev->handle = LJUSB_OpenDevice(1, 0, U3_PRODUCT_ID);
@@ -370,7 +434,7 @@ acerror_t acinit(acdev_t *dev){
     err = xmit(dev->handle,1,40);
     if(err){
         if(messages)
-            fprintf(messages, "ACINIT: Failed while loading device analog input calibration.\n");
+            fprintf(messages, "ACINIT: Failed while loading the internal temperature measurement calibration.\n");
         return err;
     }
     
@@ -430,7 +494,9 @@ acerror_t acinit(acdev_t *dev){
         return err;
     }else if(rxbuffer[6]){
         if(messages)
-            fprintf(messages, "ACINIT: Failed to turn off LEDs in frame %d with error code: 0x%02x\n", rxbuffer[7], rxbuffer[6]);
+            fprintf(messages, "ACINIT: Failed to turn off LEDs in frame %d with error code: 0x%02x\n"
+                "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes\n",
+                rxbuffer[7], rxbuffer[6]);
         return ACERR_CONFIG_FAILED;
     }
 
@@ -439,10 +505,59 @@ acerror_t acinit(acdev_t *dev){
 
 
 acerror_t acclose(acdev_t *dev){
-    if(dev->handle){
-        LJUSB_CloseDevice(dev->handle);
-        dev->handle = NULL;
+    acerror_t err;
+    
+    // Close files
+    if(dev->log){
+        fclose(dev->log);
+        dev->log = NULL;
     }
+    if(dev->stat){
+        fclose(dev->stat);
+        dev->stat = NULL;
+    }
+    
+    // There isn't much more to do if the deivce is already closed
+    if(!dev->handle)
+        return ACERR_NONE;
+    
+    // First, turn off all LEDs and the alarm.  Use FEEDBACK
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 7;
+    txbuffer[3] = 0x00;
+    ii = 6;
+    txbuffer[ii++] = 0x02;  // Echo byte
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = (ACPIN_ALARM + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = (ACPIN_IND0 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = (ACPIN_IND1 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit direction write
+    txbuffer[ii++] = (ACPIN_IND2 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit direction write
+    txbuffer[ii++] = (ACPIN_IND3 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x09; // Turn on the LED
+    txbuffer[ii++] = 0x01;
+    txbuffer[ii++] = 0x00;
+    
+    err = xmit(dev->handle, 1, 10);
+    
+    LJUSB_CloseDevice(dev->handle);
+    dev->handle = NULL;
+    
+    if(err){
+        if(messages)
+            fprintf(messages, "ACCLOSE: Received a transmission error while turning off LEDs.\n");
+        return err;
+    }else if(rxbuffer[6]){
+        if(messages)
+            fprintf(messages, "ACINIT: Failed to turn off LEDs in frame %d with error code: 0x%02x\n"
+                "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes\n",
+                rxbuffer[7], rxbuffer[6]);
+        return ACERR_CONFIG_FAILED;
+    }
+    return ACERR_NONE;
 }
 
 
