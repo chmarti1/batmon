@@ -1,17 +1,26 @@
 #include "autocom.h"
 #include <string.h>
-
+#include <time.h>
 
 #define NBUF 256            // The maximum number of bytes for buffers
+#define NSTR 128
 #define TIMEOUT_MS  4000    // The timeout interval in milliseconds
 
+char stemp[NSTR];
 uint8_t txbuffer[NBUF];
 uint8_t rxbuffer[NBUF];
 FILE* messages = NULL;
 
 
 // HELPER ROUTINES
-
+void send_message(acdev_t  *dev, char *text){
+    time_t now;
+    now = time(NULL);
+    if(messages)
+        fprintf(messages, "%s\n", text);
+    if(dev->log)
+        fprintf(dev->log, "[%d] %s\n", text);
+}
 
 // Return a double-precision representation of a 64-bit fixed-point 
 // number in the buffer.
@@ -145,8 +154,7 @@ acerror_t xmit(HANDLE h, unsigned int attempts, unsigned int reply){
         txbuffer[4] = (uint8_t) (txcs16 & 0xFF);
         txbuffer[5] = (uint8_t) txcs16 >> 8;
     }else if(txcs16 == -2){
-        if(messages)
-            fprintf(messages, "XMIT: The buffer was not correctly initialized. Aborting in the CS16 step.\n");
+        send_message(dev, "XMIT: The buffer was not correctly initialized. Aborting in the CS16 step.");
         return ACERR_CORRUPT_BUFFER;
     }
         
@@ -165,8 +173,7 @@ acerror_t xmit(HANDLE h, unsigned int attempts, unsigned int reply){
             c_flag = 1;
             // Check for too many tries
             if(count == attempts){
-                if(messages)
-                    fprintf(messages, "XMIT: Transmission failed.\n");
+                send_message(dev, "XMIT: Transmission failed.");
                 return ACERR_TX_FAILURE;
             }
         // If transmission was successful
@@ -177,20 +184,18 @@ acerror_t xmit(HANDLE h, unsigned int attempts, unsigned int reply){
             // Check for a bad checksum reply
             if(rxbuffer[1] == 0xB8){
                 c_flag = 1;
-                if(messages)
-                    fprintf(messages, "XMIT: Device detected a bad checksum.\n");
+                send_message(dev, "XMIT: Device detected a bad checksum.");
                 if(count == attempts)
                     return ACERR_BAD_CHECKSUM;
             // Check for no reply
             }else if(rxlength == 0){
-                if(messages)
-                    fprintf(messages, "XMIT: No reply.\n");
+                send_message("XMIT: No reply.");
                 if(count == attempts)
                     return ACERR_RX_FAILURE;
             // Check for an unexpected reply
             }else if(c_flag){
-                if(messages)
-                    fprintf(messages, "XMIT: Expected %d bytes, received %d.\n", reply, rxlength);
+                sprintf(stemp, "XMIT: Expected %d bytes, received %d.", reply, rxlength);
+                send_message(dev,stemp);
                 if(count == attempts)
                     return ACERR_RX_LENGTH;
             // If the reply appears valid, compare checksums and length
@@ -200,22 +205,22 @@ acerror_t xmit(HANDLE h, unsigned int attempts, unsigned int reply){
                 // Verify the packet length matches the received length
                 c_flag = (rxlength != reply);
                 if(c_flag){
-                    if(messages)
-                        fprintf(messages, "XMIT: Aborting. Packet length (%d) does not match the expected length (%d).\n", rxlength, reply);
+                    sprintf(stemp, "XMIT: Aborting. Packet length (%d) does not match the expected length (%d).", rxlength, reply);
+                    send_message(dev, stemp);
                     // Automatic failure; do not re-attempt
                     return ACERR_RX_LENGTH;
                 // Check the checksum 8
                 }else if(rxcs8 != rxbuffer[0]){
                     c_flag = 1;
-                    if(messages)
-                        fprintf(messages, "XMIT: Bad checksum 8. Received 0x%02x. Calculated 0x%02x.\n", rxbuffer[0], rxcs8);
+                    sprintf(stemp, "XMIT: Bad checksum 8. Received 0x%02x. Calculated 0x%02x.", rxbuffer[0], rxcs8);
+                    send_message(dev,stemp);
                     if(count == attempts)
                         return ACERR_BAD_CHECKSUM;
                 // Check the checksum 16 buffer
                 }else if(rxcs16 >= 0 && rxcs16 != *(uint16_t*) &rxbuffer[4]){
                     c_flag = 1;
-                    if(messages)
-                        fprintf(messages, "XMIT: Bad checksum 16.  Received 0x%04x.  Calculated 0x%04x.\n", *(uint16_t*) &rxbuffer[4], rxcs16);
+                    sprintf(stemp, "XMIT: Bad checksum 16.  Received 0x%04x.  Calculated 0x%04x.", *(uint16_t*) &rxbuffer[4], rxcs16);
+                    send_message(dev, stemp);
                     if(count == attempts)
                         return ACERR_RX_FAILURE;
                 }
@@ -259,16 +264,14 @@ acerror_t acinit(acdev_t *dev){
     
     // Test for an existing connection
     if(dev->handle){
-        if(messages)
-            fprintf(messages, "ACINIT: Device connection appears to be already open.\n");
+        send_message(dev, "ACINIT: Device connection appears to be already open.");
         return ACERR_ALREADY_OPEN;
     }
     
     // Find a U3; it should be the only LJ device.
     dev->handle = LJUSB_OpenDevice(1, 0, U3_PRODUCT_ID);
     if(!dev->handle){
-        if(messages)
-            fprintf(messages, "ACINIT: Open operation failed. Check device connection.\n");
+        send_message(dev, "ACINIT: Open operation failed. Check device connection.");
         return ACERR_OPEN_FAILED;
     }
     
@@ -280,8 +283,7 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[7] = 0x00;
     err = xmit(dev->handle,1,38);
     if(err){
-        if(messages)
-            fprintf(messages, "ACINIT: Failed to read device version information.\n");
+        send_message(dev, "ACINIT: Failed to read device version information.");
         return err;
     }
     
@@ -299,8 +301,7 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[7] = 0x00;   // Block 0
     err = xmit(dev->handle,1,40);
     if(err){
-        if(messages)
-            fprintf(messages, "ACINIT: Failed while loading device analog input calibration.\n");
+        send_message(dev, "ACINIT: Failed while loading device analog input calibration.");
         return err;
     }
     
@@ -315,8 +316,7 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[7] = 0x02;   // Block 2
     err = xmit(dev->handle,1,40);
     if(err){
-        if(messages)
-            fprintf(messages, "ACINIT: Failed while loading device analog input calibration.\n");
+        send_message(dev, "ACINIT: Failed while loading device analog input calibration.");
         return err;
     }
     
@@ -332,8 +332,7 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[11] = AC_EIOAIN_MASK;
     err = xmit(dev->handle,4,12);
     if(err){
-        if(messages)
-            fprintf(messages, "ACINIT: Failed while setting the FIO/EIO IO settings.\n");
+        send_message(dev, "ACINIT: Failed while setting the FIO/EIO IO settings.");
         return err;
     }
     buffer_dump(rxbuffer);
