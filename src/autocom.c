@@ -1,9 +1,11 @@
 #include "autocom.h"
 #include <string.h>
+#include <unistd.h>
 #include <time.h>
 
 #define NBUF 256            // The maximum number of bytes for buffers
-#define NSTR 128
+#define NSTR 256
+#define NPARAM 128
 #define TIMEOUT_MS  4000    // The timeout interval in milliseconds
 
 char stemp[NSTR];
@@ -13,14 +15,9 @@ FILE* messages = NULL;
 
 
 // HELPER ROUTINES
-void send_message(acdev_t  *dev, char *text){
-    time_t now;
-    now = time(NULL);
-    if(messages)
-        fprintf(messages, "%s\n", text);
-    if(dev->log)
-        fprintf(dev->log, "[%d] %s\n", text);
-}
+
+#define streq(a,b) (strcmp(a,b) == 0)
+
 
 // Return a double-precision representation of a 64-bit fixed-point 
 // number in the buffer.
@@ -138,9 +135,9 @@ void buffer_dump(uint8_t *b){
  *  ACERR_TX_FAILURE and ACERR_RX_FAILURE indicate that the read/write
  *          operations did not succeed.
  */
-acerror_t xmit(HANDLE h, unsigned int attempts, unsigned int reply){
+acerror_t xmit(acdev_t *dev, unsigned int attempts, unsigned int reply){
     unsigned int count;
-    unsigned int txlength, rxlength;
+    unsigned int txlength, rxlength, result;
     char c_flag;
     int txcs16, rxcs16;
     uint8_t rxcs8;
@@ -151,10 +148,9 @@ acerror_t xmit(HANDLE h, unsigned int attempts, unsigned int reply){
     txcs16 = checksum16(txbuffer, &txlength);
     // extended transmission requires cs16
     if(txcs16 >= 0){
-        txbuffer[4] = (uint8_t) (txcs16 & 0xFF);
-        txbuffer[5] = (uint8_t) txcs16 >> 8;
+        *(uint16_t*) &txbuffer[4] = (uint16_t) txcs16;
     }else if(txcs16 == -2){
-        send_message(dev, "XMIT: The buffer was not correctly initialized. Aborting in the CS16 step.");
+        acmessage_send(dev, "XMIT: The buffer was not correctly initialized. Aborting in the CS16 step.");
         return ACERR_CORRUPT_BUFFER;
     }
         
@@ -167,35 +163,36 @@ acerror_t xmit(HANDLE h, unsigned int attempts, unsigned int reply){
     while(c_flag){
         count ++;
         // Try to transmit.  c_flag will be True on failure
-        c_flag = txlength != LJUSB_WriteTO(h, txbuffer, txlength, TIMEOUT_MS);
+        result = LJUSB_WriteTO(dev->handle, txbuffer, txlength, TIMEOUT_MS);
+        c_flag = txlength != result;
         // If transmission was unsuccessful
         if(c_flag){
-            c_flag = 1;
             // Check for too many tries
             if(count == attempts){
-                send_message(dev, "XMIT: Transmission failed.");
+                sprintf(stemp, "XMIT: Transmission failed. Attempted (%d) bytes, sent (%d).", txlength, result);
+                acmessage_send(dev, stemp);
                 return ACERR_TX_FAILURE;
             }
         // If transmission was successful
         }else{
             // Try to receive.  c_flag will be True on failure
-            rxlength = LJUSB_ReadTO(h, rxbuffer, reply, TIMEOUT_MS);
+            rxlength = LJUSB_ReadTO(dev->handle, rxbuffer, reply, TIMEOUT_MS);
             c_flag = (rxlength != reply);
             // Check for a bad checksum reply
             if(rxbuffer[1] == 0xB8){
                 c_flag = 1;
-                send_message(dev, "XMIT: Device detected a bad checksum.");
+                acmessage_send(dev, "XMIT: Device detected a bad checksum.");
                 if(count == attempts)
                     return ACERR_BAD_CHECKSUM;
             // Check for no reply
             }else if(rxlength == 0){
-                send_message("XMIT: No reply.");
+                acmessage_send(dev, "XMIT: No reply.");
                 if(count == attempts)
                     return ACERR_RX_FAILURE;
             // Check for an unexpected reply
             }else if(c_flag){
                 sprintf(stemp, "XMIT: Expected %d bytes, received %d.", reply, rxlength);
-                send_message(dev,stemp);
+                acmessage_send(dev,stemp);
                 if(count == attempts)
                     return ACERR_RX_LENGTH;
             // If the reply appears valid, compare checksums and length
@@ -206,21 +203,21 @@ acerror_t xmit(HANDLE h, unsigned int attempts, unsigned int reply){
                 c_flag = (rxlength != reply);
                 if(c_flag){
                     sprintf(stemp, "XMIT: Aborting. Packet length (%d) does not match the expected length (%d).", rxlength, reply);
-                    send_message(dev, stemp);
+                    acmessage_send(dev, stemp);
                     // Automatic failure; do not re-attempt
                     return ACERR_RX_LENGTH;
                 // Check the checksum 8
                 }else if(rxcs8 != rxbuffer[0]){
                     c_flag = 1;
                     sprintf(stemp, "XMIT: Bad checksum 8. Received 0x%02x. Calculated 0x%02x.", rxbuffer[0], rxcs8);
-                    send_message(dev,stemp);
+                    acmessage_send(dev,stemp);
                     if(count == attempts)
                         return ACERR_BAD_CHECKSUM;
                 // Check the checksum 16 buffer
                 }else if(rxcs16 >= 0 && rxcs16 != *(uint16_t*) &rxbuffer[4]){
                     c_flag = 1;
                     sprintf(stemp, "XMIT: Bad checksum 16.  Received 0x%04x.  Calculated 0x%04x.", *(uint16_t*) &rxbuffer[4], rxcs16);
-                    send_message(dev, stemp);
+                    acmessage_send(dev, stemp);
                     if(count == attempts)
                         return ACERR_RX_FAILURE;
                 }
@@ -246,13 +243,126 @@ acerror_t xmit(HANDLE h, unsigned int attempts, unsigned int reply){
  *  be streamed.  It is set to NULL by default, but can be redirrected
  *  as desired.  If it is set to NULL, then error messaging is disabled.
  */
-acerror_t acmessage(FILE* target){
+acerror_t acmessage_set(FILE* target){
     messages = target;
+    return ACERR_NONE;
 }
 
-/* ACINIT - open the device connection
+acerror_t acmessage_send(acdev_t *dev, char *text){
+    time_t now;
+    now = time(NULL);
+    if(messages)
+        fprintf(messages, "%s\n", text);
+    if(dev->logfile)
+        fprintf(dev->logfile, "[%d] %s\n", (int) now, text);
+    return ACERR_NONE;
+}
+
+acerror_t acconfig(acdev_t *dev, char *filename){
+    int result, count;
+    char param[NPARAM], value[NPARAM];
+    uint8_t float_flag;
+    double fvalue;
+    double *ftarget;
+    FILE *fd = NULL;
+    acerror_t done = ACERR_NONE;
+    
+    // First, initialize the device parameters that need to be set
+    // before running acinit()
+    dev->handle = NULL;
+    dev->logfile = NULL;
+    dev->statfile = NULL;
+    dev->current_slope_av = 0;
+    dev->current_zero_v = 0;
+    dev->voltage_slope_nd = 0;
+    dev->voltage_zero_v = 0;
+    
+    // Open the configuration file
+    fd = fopen(filename, "r");
+    if(!fd){
+        if(messages)
+            fprintf(messages, "ACCONFIG: Failed to open file: %s", filename);
+        return ACERR_CONFIG_FILE;
+    }
+    
+    for(count=1; !feof(fd); count++){
+        result = fscanf(fd, "%s %[^\n]", param, value);
+        
+        if(param[0] != '#' && result != 2 && !feof(fd)){
+            sprintf(stemp, "ACCONFIG: Parameter-value pair number %d was illegal. (%d)", count, result);
+            acmessage_send(dev, stemp);
+            sprintf(stemp, "          param: %s", param);
+            acmessage_send(dev, stemp);
+            sprintf(stemp, "          value: %s", value);
+            acmessage_send(dev, stemp);
+            return ACERR_CONFIG_SYNTAX;
+        }
+        
+        // If the value is a floating point, ftarget is a double pointer
+        // that will be set to the value's end destination.  If it is
+        // not NULL when parsing is complete, then the value will be
+        // converted into a float.
+        ftarget = NULL;
+        if(param[0] == '#'){
+            // This is a comment.  Do nothing.
+        }else if(streq(param, "current_slope")){
+            ftarget = &dev->current_slope_av;
+        }else if(streq(param, "current_zero")){
+            ftarget = &dev->current_zero_v;
+        }else if(streq(param, "voltage_slope")){
+            ftarget = &dev->voltage_slope_nd;
+        }else if(streq(param, "voltage_zero")){
+            ftarget = &dev->voltage_zero_v;
+        }else if(streq(param, "logfile")){
+            if(dev->logfile){
+                sprintf(stemp, "ACCONFIG: Multiple entries for LOGFILE in: %s", value);
+                acmessage_send(dev, stemp);
+                // Nonfatal
+                done = ACERR_LOG_FILE;
+            }else{
+                dev->logfile = fopen(value, "a");
+                if(!dev->logfile){
+                    sprintf(stemp, "ACCONFIG: Failed to open LOGFILE: %s", value);
+                    acmessage_send(dev, stemp);
+                    return ACERR_LOG_FILE;
+                }
+            }
+        }else if(streq(param, "statfile")){
+            if(dev->statfile){
+                sprintf(stemp, "ACCONFIG: Multiple entries for STATFILE in: %s", value);
+                acmessage_send(dev, stemp);
+                // Nonfatal
+                done = ACERR_STAT_FILE;
+            }else{
+                dev->statfile = fopen(value, "a");
+                if(!dev->statfile){
+                    sprintf(stemp, "ACCONFIG: Failed to open STATFILE: %s", value);
+                    acmessage_send(dev, stemp);
+                    return ACERR_STAT_FILE;
+                }
+            }
+        }else{
+            sprintf(stemp, "ACCONFIG: Unrecognized parameter: %s", param);
+            acmessage_send(dev, stemp);
+            return ACERR_CONFIG_SYNTAX;
+        }
+        // If the value is floating point
+        if(ftarget && 1 != sscanf(value, "%lf", ftarget)){
+            sprintf(stemp, "ACCONFIG: Non-numerical value for param: %s", param);
+            acmessage_send(dev, stemp);
+            sprintf(stemp, "          value: %s", value);
+            acmessage_send(dev, stemp);
+            return ACERR_CONFIG_SYNTAX;
+        }
+    }
+    return done;
+}
+
+/* ACINIT - initialize the device connection
  * 
- *  DEV is the device struct.  dev->handle must be set to NULL before
+ *  DEV is the ACDEV_T device struct pointer.  Before calling ACINIT,
+ * the application is responsible for initializing values of the struct
+ * dev->handle must be set to NULL before
  *  initialization, or an ACERR_ALREADY_OPEN error will be raised.
  * 
  *  Errors:
@@ -261,18 +371,80 @@ acerror_t acmessage(FILE* target){
  */
 acerror_t acinit(acdev_t *dev){
     acerror_t err;
+    unsigned int ii;
     
     // Test for an existing connection
     if(dev->handle){
-        send_message(dev, "ACINIT: Device connection appears to be already open.");
+        acmessage_send(dev, "ACINIT: Device connection appears to be already open.");
         return ACERR_ALREADY_OPEN;
     }
+    
+    // Force the stream active flag to false
+    dev->aistr_active = 0;
     
     // Find a U3; it should be the only LJ device.
     dev->handle = LJUSB_OpenDevice(1, 0, U3_PRODUCT_ID);
     if(!dev->handle){
-        send_message(dev, "ACINIT: Open operation failed. Check device connection.");
+        acmessage_send(dev, "ACINIT: Open operation failed. Check device connection.");
         return ACERR_OPEN_FAILED;
+    }
+    
+    
+    // Use the FEEDBACK command to set the EIO pin directions and states
+    // We'll turn everything on to test the LEDs and we'll turn the U3
+    // LED off to signify the test.
+    
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 12;
+    txbuffer[3] = 0x00;
+    ii = 6;
+    txbuffer[ii++] = 0x00;  // Echo byte
+    txbuffer[ii++] = 0x0D; // Bit direction write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_ALARM + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0D; // Bit direction write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND0 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0D; // Bit direction write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND1 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0D; // Bit direction write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND2 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0D; // Bit direction write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND3 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_ALARM + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND0 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND1 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit direction write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND2 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit direction write
+    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND3 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x09; // Turn off the LED
+    txbuffer[ii++] = 0x00;
+    txbuffer[ii++] = 0x00;
+    
+    /*
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 2;
+    txbuffer[3] = 0x00;
+    txbuffer[6] = 0x01;
+    txbuffer[7] = 0x09;
+    txbuffer[8] = 0x01;
+    txbuffer[9] = 0x00;
+    */
+    err = xmit(dev->handle,1,10);
+    
+    buffer_dump(txbuffer);
+    buffer_dump(rxbuffer);
+    
+    if(err){
+        if(messages)
+            fprintf(messages, "ACINIT: Failed to initialize pin states.\n");
+        return err;
+    }else if(rxbuffer[6]){
+        if(messages)
+            fprintf(messages, "ACINIT: Pin initialization failed in frame %d with error code: 0x%02x\n", rxbuffer[7], rxbuffer[6]);
+        return ACERR_CONFIG_FAILED;
     }
     
     // Use ConfigU3 command to retrieve version information
@@ -283,12 +455,12 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[7] = 0x00;
     err = xmit(dev->handle,1,38);
     if(err){
-        send_message(dev, "ACINIT: Failed to read device version information.");
+        acmessage_send(dev, "ACINIT: Failed to read device version information.");
         return err;
     }
     
     dev->firmware_version = rxbuffer[10] + ((float) rxbuffer[9]) / 100;
-    dev->bootloader_version = txbuffer[12] + ((float) rxbuffer[11]) / 100;
+    dev->bootloader_version = rxbuffer[12] + ((float) rxbuffer[11]) / 100;
     dev->hardware_version = rxbuffer[14] + ((float) rxbuffer[13]) / 100;
     dev->serial_number = *((unsigned int*) &rxbuffer[15]);
     
@@ -301,7 +473,7 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[7] = 0x00;   // Block 0
     err = xmit(dev->handle,1,40);
     if(err){
-        send_message(dev, "ACINIT: Failed while loading device analog input calibration.");
+        acmessage_send(dev, "ACINIT: Failed while loading device analog input calibration.");
         return err;
     }
     
@@ -316,7 +488,7 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[7] = 0x02;   // Block 2
     err = xmit(dev->handle,1,40);
     if(err){
-        send_message(dev, "ACINIT: Failed while loading device analog input calibration.");
+        acmessage_send(dev, "ACINIT: Failed while loading device analog input calibration.");
         return err;
     }
     
@@ -332,19 +504,114 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[11] = AC_EIOAIN_MASK;
     err = xmit(dev->handle,4,12);
     if(err){
-        send_message(dev, "ACINIT: Failed while setting the FIO/EIO IO settings.");
+        acmessage_send(dev, "ACINIT: Failed while setting the FIO/EIO IO settings.");
         return err;
     }
-    buffer_dump(rxbuffer);
+
+    // Finally, use the FEEDBACK command to return LEDs to their resting
+    // states.  Normally, this happens so quickly the user will not 
+    // notice, but if configuration fails, the alarm and LEDs will hang
+    // in a state to warn the user.
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 7;
+    txbuffer[3] = 0x00;
+    ii = 6;
+    txbuffer[ii++] = 0x02;  // Echo byte
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = (ACPIN_ALARM + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = (ACPIN_IND0 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = (ACPIN_IND1 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit direction write
+    txbuffer[ii++] = (ACPIN_IND2 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit direction write
+    txbuffer[ii++] = (ACPIN_IND3 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x09; // Turn on the LED
+    txbuffer[ii++] = 0x01;
+    txbuffer[ii++] = 0x00;
+    
+    /*
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 2;
+    txbuffer[3] = 0x00;
+    txbuffer[6] = 0x01;
+    txbuffer[7] = 0x09;
+    txbuffer[8] = 0x01;
+    txbuffer[9] = 0x00;
+    */
+    err = xmit(dev->handle,1,10);
+    if(err){
+        if(messages)
+            fprintf(messages, "ACINIT: Failed to set pin states.\n");
+        return err;
+    }else if(rxbuffer[6]){
+        if(messages)
+            fprintf(messages, "ACINIT: Failed to turn off LEDs in frame %d with error code: 0x%02x\n"
+                "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes\n",
+                rxbuffer[7], rxbuffer[6]);
+        return ACERR_CONFIG_FAILED;
+    }
+
     return ACERR_NONE;
 }
 
 
 acerror_t acclose(acdev_t *dev){
-    if(dev->handle){
-        LJUSB_CloseDevice(dev->handle);
-        dev->handle = NULL;
+    acerror_t err;
+    int ii;
+    
+    // Close files
+    if(dev->logfile){
+        fclose(dev->logfile);
+        dev->logfile = NULL;
     }
+    if(dev->statfile){
+        fclose(dev->statfile);
+        dev->statfile = NULL;
+    }
+    
+    // There isn't much more to do if the deivce is already closed
+    if(!dev->handle)
+        return ACERR_NONE;
+    
+    // First, turn off all LEDs and the alarm.  Use FEEDBACK
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 7;
+    txbuffer[3] = 0x00;
+    ii = 6;
+    txbuffer[ii++] = 0x02;  // Echo byte
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = (ACPIN_ALARM + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = (ACPIN_IND0 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit state write
+    txbuffer[ii++] = (ACPIN_IND1 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit direction write
+    txbuffer[ii++] = (ACPIN_IND2 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x0B; // Bit direction write
+    txbuffer[ii++] = (ACPIN_IND3 + AC_EIO_OFFSET);
+    txbuffer[ii++] = 0x09; // Turn on the LED
+    txbuffer[ii++] = 0x01;
+    txbuffer[ii++] = 0x00;
+    
+    err = xmit(dev->handle, 1, 10);
+    
+    LJUSB_CloseDevice(dev->handle);
+    dev->handle = NULL;
+    
+    if(err){
+        if(messages)
+            fprintf(messages, "ACCLOSE: Received a transmission error while turning off LEDs.\n");
+        return err;
+    }else if(rxbuffer[6]){
+        if(messages)
+            fprintf(messages, "ACINIT: Failed to turn off LEDs in frame %d with error code: 0x%02x\n"
+                "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes\n",
+                rxbuffer[7], rxbuffer[6]);
+        return ACERR_CONFIG_FAILED;
+    }
+    return ACERR_NONE;
 }
 
 

@@ -1,0 +1,29 @@
+[1639060244] ACCONFIG: Parameter-value pair number 8 was illegal.
+
+[1639060377] ACCONFIG: Parameter-value pair number 8 was illegal.
+
+[1639060611] ACCONFIG: Parameter-value pair number 8 was illegal.
+
+[1639060611] ACINIT: Open operation failed. Check device connection.
+[1639060633] ACCONFIG: Parameter-value pair number 8 was illegal.
+
+[1639060633] ACINIT: Open operation failed. Check device connection.
+[1639060659] ACCONFIG: Parameter-value pair number 8 was illegal.
+
+[1639060659] ACINIT: Open operation failed. Check device connection.
+[1639060766] ACCONFIG: Parameter-value pair number 8 was illegal.
+
+[1639060766] ACINIT: Open operation failed. Check device connection.
+[1639060932] ACCONFIG: Parameter-value pair number 8 was illegal.
+[1639060932]           param: voltage_zero
+[1639060932]           value: 0.
+[1639060932] ACINIT: Open operation failed. Check device connection.
+[1639060990] ACCONFIG: Parameter-value pair number 8 was illegal. (-1)
+[1639060990]           param: voltage_zero
+[1639060990]           value: 0.
+[1639060990] ACINIT: Open operation failed. Check device connection.
+[1639061039] ACCONFIG: Parameter-value pair number 8 was illegal. (-1)
+[1639061039]           param: voltage_zero
+[1639061039]           value: 0.
+[1639061039] ACINIT: Open operation failed. Check device connection.
+[1639061050] ACINIT: Open operation failed. Check device connection.
