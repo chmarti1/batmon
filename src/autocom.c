@@ -432,10 +432,7 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[8] = 0x01;
     txbuffer[9] = 0x00;
     */
-    err = xmit(dev->handle,1,10);
-    
-    buffer_dump(txbuffer);
-    buffer_dump(rxbuffer);
+    err = xmit(dev,1,10);
     
     if(err){
         if(messages)
@@ -453,7 +450,7 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[3] = 0x08;
     txbuffer[6] = 0x00;
     txbuffer[7] = 0x00;
-    err = xmit(dev->handle,1,38);
+    err = xmit(dev,1,38);
     if(err){
         acmessage_send(dev, "ACINIT: Failed to read device version information.");
         return err;
@@ -471,7 +468,7 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[3] = 0x2D;
     txbuffer[6] = 0x00;
     txbuffer[7] = 0x00;   // Block 0
-    err = xmit(dev->handle,1,40);
+    err = xmit(dev,1,40);
     if(err){
         acmessage_send(dev, "ACINIT: Failed while loading device analog input calibration.");
         return err;
@@ -486,7 +483,7 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[3] = 0x2D;
     txbuffer[6] = 0x00;
     txbuffer[7] = 0x02;   // Block 2
-    err = xmit(dev->handle,1,40);
+    err = xmit(dev,1,40);
     if(err){
         acmessage_send(dev, "ACINIT: Failed while loading device analog input calibration.");
         return err;
@@ -502,11 +499,14 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[7] = 0x00;
     txbuffer[10] = 0x0F;
     txbuffer[11] = AC_EIOAIN_MASK;
-    err = xmit(dev->handle,4,12);
+    err = xmit(dev,4,12);
     if(err){
         acmessage_send(dev, "ACINIT: Failed while setting the FIO/EIO IO settings.");
         return err;
     }
+
+
+    sleep(1);
 
     // Finally, use the FEEDBACK command to return LEDs to their resting
     // states.  Normally, this happens so quickly the user will not 
@@ -540,7 +540,7 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[8] = 0x01;
     txbuffer[9] = 0x00;
     */
-    err = xmit(dev->handle,1,10);
+    err = xmit(dev,1,10);
     if(err){
         if(messages)
             fprintf(messages, "ACINIT: Failed to set pin states.\n");
@@ -595,7 +595,7 @@ acerror_t acclose(acdev_t *dev){
     txbuffer[ii++] = 0x01;
     txbuffer[ii++] = 0x00;
     
-    err = xmit(dev->handle, 1, 10);
+    err = xmit(dev, 1, 10);
     
     LJUSB_CloseDevice(dev->handle);
     dev->handle = NULL;
