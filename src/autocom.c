@@ -280,8 +280,8 @@ acerror_t acconfig(acdev_t *dev, char *filename){
     // Open the configuration file
     fd = fopen(filename, "r");
     if(!fd){
-        if(messages)
-            fprintf(messages, "ACCONFIG: Failed to open file: %s", filename);
+        sprintf(stemp, "ACCONFIG: Failed to open file: %s", filename);
+        acmessage_send(dev, stemp);
         return ACERR_CONFIG_FILE;
     }
     
@@ -358,6 +358,22 @@ acerror_t acconfig(acdev_t *dev, char *filename){
     return done;
 }
 
+acerror_t acopen(acdev_t *dev){
+    if(dev->handle){
+        acmessage_send(dev, "ACOPEN: The connection already appears to be open.");
+        return ACERR_ALREADY_OPEN;
+    }
+    
+    // Find a U3; it should be the only LJ device.
+    dev->handle = LJUSB_OpenDevice(1, 0, U3_PRODUCT_ID);
+    if(!dev->handle){
+        acmessage_send(dev, "ACOPEN: Open operation failed. Check device connection.");
+        return ACERR_OPEN_FAILED;
+    }
+    
+    return ACERR_NONE;
+}
+
 /* ACINIT - initialize the device connection
  * 
  *  DEV is the ACDEV_T device struct pointer.  Before calling ACINIT,
@@ -374,21 +390,10 @@ acerror_t acinit(acdev_t *dev){
     unsigned int ii;
     
     // Test for an existing connection
-    if(dev->handle){
-        acmessage_send(dev, "ACINIT: Device connection appears to be already open.");
-        return ACERR_ALREADY_OPEN;
-    }
-    
-    // Force the stream active flag to false
-    dev->aistr_active = 0;
-    
-    // Find a U3; it should be the only LJ device.
-    dev->handle = LJUSB_OpenDevice(1, 0, U3_PRODUCT_ID);
     if(!dev->handle){
-        acmessage_send(dev, "ACINIT: Open operation failed. Check device connection.");
-        return ACERR_OPEN_FAILED;
+        acmessage_send(dev, "ACINIT: The device connection does not appear to be open.");
+        return ACERR_DEV_NOT_OPEN;
     }
-    
     
     // Use the FEEDBACK command to set the EIO pin directions and states
     // We'll turn everything on to test the LEDs and we'll turn the U3
@@ -505,9 +510,6 @@ acerror_t acinit(acdev_t *dev){
         return err;
     }
 
-
-    sleep(1);
-
     // Finally, use the FEEDBACK command to return LEDs to their resting
     // states.  Normally, this happens so quickly the user will not 
     // notice, but if configuration fails, the alarm and LEDs will hang
@@ -542,14 +544,13 @@ acerror_t acinit(acdev_t *dev){
     */
     err = xmit(dev,1,10);
     if(err){
-        if(messages)
-            fprintf(messages, "ACINIT: Failed to set pin states.\n");
+        acmessage_send(dev,"ACINIT: Failed to set pin states.\n");
         return err;
     }else if(rxbuffer[6]){
-        if(messages)
-            fprintf(messages, "ACINIT: Failed to turn off LEDs in frame %d with error code: 0x%02x\n"
+        sprintf(stemp, "ACINIT: Failed to turn off LEDs in frame %d with error code: 0x%02x\n"
                 "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes\n",
                 rxbuffer[7], rxbuffer[6]);
+        acmessage_send(dev, stemp);
         return ACERR_CONFIG_FAILED;
     }
 
@@ -575,42 +576,9 @@ acerror_t acclose(acdev_t *dev){
     if(!dev->handle)
         return ACERR_NONE;
     
-    // First, turn off all LEDs and the alarm.  Use FEEDBACK
-    txbuffer[1] = 0xF8;
-    txbuffer[2] = 7;
-    txbuffer[3] = 0x00;
-    ii = 6;
-    txbuffer[ii++] = 0x02;  // Echo byte
-    txbuffer[ii++] = 0x0B; // Bit state write
-    txbuffer[ii++] = (ACPIN_ALARM + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit state write
-    txbuffer[ii++] = (ACPIN_IND0 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit state write
-    txbuffer[ii++] = (ACPIN_IND1 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit direction write
-    txbuffer[ii++] = (ACPIN_IND2 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit direction write
-    txbuffer[ii++] = (ACPIN_IND3 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x09; // Turn on the LED
-    txbuffer[ii++] = 0x01;
-    txbuffer[ii++] = 0x00;
-    
-    err = xmit(dev, 1, 10);
-    
     LJUSB_CloseDevice(dev->handle);
     dev->handle = NULL;
     
-    if(err){
-        if(messages)
-            fprintf(messages, "ACCLOSE: Received a transmission error while turning off LEDs.\n");
-        return err;
-    }else if(rxbuffer[6]){
-        if(messages)
-            fprintf(messages, "ACINIT: Failed to turn off LEDs in frame %d with error code: 0x%02x\n"
-                "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes\n",
-                rxbuffer[7], rxbuffer[6]);
-        return ACERR_CONFIG_FAILED;
-    }
     return ACERR_NONE;
 }
 
@@ -631,5 +599,42 @@ acerror_t acshow(acdev_t *dev){
     printf("Temp slope (K/bit): %.6e\n",
         dev->temp_slope_K);
         
+    return ACERR_NONE;
+}
+
+
+acerror_t acset(acdev_t *dev, acpin_t pin, int value){
+    unsigned int ii;
+    acerror_t err;
+    uint8_t write;
+    
+    write = pin + AC_EIO_OFFSET;
+    if(value)
+        write |= AC_BITSTATE_MASK;
+    
+    // Finally, use the FEEDBACK command to set LEDs
+    
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 2;
+    txbuffer[3] = 0x00;
+    
+    txbuffer[6] = 0x03;  // Echo byte
+    txbuffer[7] = 0x0B; // Bit state write
+    txbuffer[8] = write;
+    txbuffer[9] = 0x00;
+    
+    err = xmit(dev,1,10);
+    if(err){
+        acmessage_send(dev, "ACSET: Failed to set pin states.\n");
+        return err;
+    }else if(rxbuffer[6]){
+        sprintf(stemp, "ACSET: Failed to set output with error code: 0x%02x\n"
+                "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes\n",
+                rxbuffer[6]);
+        acmessage_send(dev, stemp);
+        return ACERR_CONFIG_FAILED;
+    }
+
+    
     return ACERR_NONE;
 }

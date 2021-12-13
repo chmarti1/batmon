@@ -187,9 +187,13 @@ acerror_t acmessage_send(acdev_t *dev, char *text);
  */
 acerror_t acconfig(acdev_t *dev, char *filename);
 
+/* ACOPEN - Open a connection to the device
+ */
+acerror_t acopen(acdev_t *dev);
+
 /* ACINIT - Initialize the U3
- *  Opens a connection to the U3 and initializes the relevant 
- * configuration settings.  The process is:
+ *  Configures the U3 for use with the battery monitor system once the
+ * connection is already open. The process is:
  *  (1) Configures ALARM and IND0-IND3 pins for output and 
  *      sets all High while setting the U3 LED off
  *  (2) Retrieves device hardware, firmware, and bootloader versions
@@ -239,6 +243,8 @@ acerror_t acinit(acdev_t *dev);
 acerror_t acclose(acdev_t *dev);
 
 acerror_t acshow(acdev_t *dev);
+
+acerror_t acset(acdev_t *dev, acpin_t pin, int value);
 
 acerror_t acstream_start(acdev_t *dev);
 
