@@ -126,6 +126,7 @@ typedef struct _acdev_t {
     // Files
     FILE *logfile;
     FILE *statfile;
+
     // Descriptive
     float firmware_version;
     float bootloader_version;
@@ -253,6 +254,5 @@ acerror_t acstream_read(acdev_t *dev, double **data);
 acerror_t acstream_post(double *data, double *iint, double *imean, double *vmean, double *tmean);
 
 acerror_t acstream_stop(acdev_t *dev);
-
 
 #endif
