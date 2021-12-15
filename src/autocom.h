@@ -13,24 +13,35 @@
 #include <stdio.h>
 #include <stdint.h>
 
+// Analog stream prameters
+#define AC_SAMPLES_PER_READ     5
+#define AC_CHANNELS             3
+#define AC_PACKET               AC_SAMPLES_PER_READ * AC_CHANNELS
+typedef enum _acchannel_t {
+    ACCHAN_CURRENT = 0,
+    ACCHAN_VOLTAGE = 1,
+    ACCHAN_TEMPERATURE = 2,
+} acchannel_t;
+
+#define AC_EIO_OFFSET  8
 
 /* ACPIN_T - The pin number type
  *  Establishes constants for the pin numbers
  */
 typedef enum _acpin_t {
-    ACPIN_NONE = -1,
-    ACPIN_CS = 0,
-    ACPIN_VS = 1,
-    ACPIN_ALARM = 2,
-    ACPIN_IND0 = 3,
-    ACPIN_IND1 = 4,
-    ACPIN_IND2 = 5,
-    ACPIN_IND3 = 6,
+    ACPIN_NONE =    -1,
+    ACPIN_CS =      0,
+    ACPIN_VS =      1,
+    ACPIN_ALARM =   2,
+    ACPIN_IND0 =    3,
+    ACPIN_IND1 =    4,
+    ACPIN_IND2 =    5,
+    ACPIN_IND3 =    6,
+    ACPIN_T =       30 - AC_EIO_OFFSET,
 } acpin_t;
 
 // Build an EIO Analog mask
 #define AC_EIOAIN_MASK  (1<<ACPIN_CS | 1<<ACPIN_VS)
-#define AC_EIO_OFFSET  8
 #define AC_BITSTATE_MASK  0x80
 
 #define AC_ADCCLK_HZ    15625.0
@@ -48,6 +59,7 @@ typedef enum _acerror_t {
     ACERR_TX_FAILURE =      0x13,       // Transmit or receive failed 
     ACERR_RX_FAILURE =      0x14,       //   
     ACERR_RX_LENGTH =       0x15,       // Reply length was unexpected
+    ACERR_PARAM_ERROR =     0x16,       // A function argument was illegal
 
     // Configuration errors
     ACERR_CONFIG_FILE =     0x20,       // Configuration file was not opened
@@ -56,9 +68,15 @@ typedef enum _acerror_t {
     ACERR_STAT_FILE =       0x23,       // Could not open the stat file
 
     // Init/Open Errors
-    ACERR_ALREADY_OPEN =    0x30,       // Init was run twice
+    ACERR_DEV_ALREADY_OPEN =    0x30,       // Init was run twice
     ACERR_OPEN_FAILED =     0x31,       // Open operation failed
     ACERR_CONFIG_FAILED =   0x32,       // Failed while configuring IO
+    
+    // Stream Errors
+    ACERR_AICONFIG_FAILED = 0x40,       
+    ACERR_AISTART_FAILED =  0x41,
+    ACERR_AIREAD_FAILED =   0x42,
+    ACERR_AISTOP_FAILED =   0x43,
     
 } acerror_t;
 
@@ -144,8 +162,9 @@ typedef struct _acdev_t {
     // Voltage
     double voltage_slope_nd;
     double voltage_zero_v;
-    // flags
-    unsigned int aistr_active:1;    // (acstream)
+    // Stream status parameters
+    unsigned int aistr_backlog;
+    unsigned int aistr_active:1;
 } acdev_t;
 
 
@@ -197,10 +216,7 @@ acerror_t acopen(acdev_t *dev);
  * connection is already open. The process is:
  *  (1) Configures ALARM and IND0-IND3 pins for output and 
  *      sets all High while setting the U3 LED off
- *  (2) Retrieves device hardware, firmware, and bootloader versions
- *  (3) Retrieves analog calibration information
- *  (4) Retrieves the temperature measurement calibration
- *  (5) Sets ALARM and IND0-IND3 Low and turns the U3 LED on.
+ *  (2) Sets ALARM and IND0-IND3 Low and turns the U3 LED on.
  * If there is an error in the initialization phase and it cannot 
  * complete, the alarm and LEDs will remain lit to warn the user.
  * 
@@ -211,7 +227,7 @@ acerror_t acopen(acdev_t *dev);
  * file pointer using the ACMESSAGE() function.
  * 
  * The ACINIT function returns error codes:
- * ACERR_ALREADY_OPEN
+ * ACERR_DEV_ALREADY_OPEN
  *      It appears that the device connection is already open. This 
  *      means dev.handle is not NULL, so if the connection is not 
  *      actually open, just add a line of code setting dev.handle to 
@@ -247,11 +263,11 @@ acerror_t acshow(acdev_t *dev);
 
 acerror_t acset(acdev_t *dev, acpin_t pin, int value);
 
+acerror_t acget(acdev_t *dev, acpin_t pin, double *value);
+
 acerror_t acstream_start(acdev_t *dev);
 
-acerror_t acstream_read(acdev_t *dev, double **data);
-
-acerror_t acstream_post(double *data, double *iint, double *imean, double *vmean, double *tmean);
+acerror_t acstream_read(acdev_t *dev, double *data);
 
 acerror_t acstream_stop(acdev_t *dev);
 

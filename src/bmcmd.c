@@ -1,6 +1,7 @@
 #include "autocom.h"
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 
 #define BATTERY_CONFIG "/etc/batmon/battery.conf"
 #define MEASURE_CONFIG "/etc/batmon/measure.conf"
@@ -12,6 +13,7 @@
 int main(int argc, char* argv[]){
     int ii;
     int itemp;
+    double ftemp;
     char stemp[128];
     acerror_t err;
     acdev_t dev;
@@ -67,12 +69,64 @@ int main(int argc, char* argv[]){
                 err = acset(&dev, itemp + 3, 1);
             else if(streq(argv[ii], "off"))
                 err = acset(&dev, itemp + 3, 0);
+        // VOLTS
+        }else if(streq(argv[ii], "voltage")){
+            if(err = acget(&dev, ACPIN_VS, &ftemp)){
+                sprintf(stemp, "BMCMD: Voltage measurement failed with error (0x%02x).", err);
+                acmessage_send(&dev, stemp);
+                acclose(&dev);
+                return -1;
+            }
+            printf("%.4fV\n", ftemp);
+        // AMPS
+        }else if(streq(argv[ii], "current")){
+            if(err = acget(&dev, ACPIN_CS, &ftemp)){
+                sprintf(stemp, "BMCMD: Current measurement failed with error (0x%02x).", err);
+                acmessage_send(&dev, stemp);
+                acclose(&dev);
+                return -1;
+            }
+            printf("%.3fA\n", ftemp);
+        // TEMP
+        }else if(streq(argv[ii], "temperature")){
+            if(err = acget(&dev, ACPIN_T, &ftemp)){
+                sprintf(stemp, "BMCMD: Temperature measurement failed with error (0x%02x).", err);
+                acmessage_send(&dev, stemp);
+                acclose(&dev);
+                return -1;
+            }
+            printf("%.2fK\n", ftemp);
+        // SHOW
+        }else if(streq(argv[ii], "show")){
+            acshow(&dev);
+        // WAIT
+        }else if(streq(argv[ii], "wait")){
+            if(ii >= argc){
+                acmessage_send(&dev, "BMCMD: The WAIT command requires an argument; number of seconds.");
+                acclose(&dev);
+                return -1;
+            }else if(1!=sscanf(argv[++ii], "%lf", &ftemp)){
+                sprintf(stemp, "BMCMD: WAIT expects number of seconds. Found: %s", argv[ii]);
+                acmessage_send(&dev, stemp);
+                acclose(&dev);
+                return -1;
+            }
+            usleep((int) (ftemp * 1e6));
+        // STOP
+        }else if(streq(argv[ii], "stop")){
+            err = acstream_stop(&dev);
+        }else{
+            sprintf(stemp,  "BMCMD: Unrecognized command: %s", argv[ii]);
+            acmessage_send(&dev, stemp);
+            acclose(&dev);
+            return -1;
         }
         
         // Test for an autocom error
         if(err){
             sprintf(stemp, "BMCMD: Encountered error (0x%02x) at argument %d, %s.", err, ii, argv[ii]);
             acmessage_send(&dev, stemp);
+            acclose(&dev);
             return -1;
         }
     }

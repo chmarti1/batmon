@@ -7,11 +7,13 @@
 #define NSTR 256
 #define NPARAM 128
 #define TIMEOUT_MS  2000    // The timeout interval in milliseconds
+#define STREAM_NBUF 14+2*AC_PACKET  // The rxbuffer length for streaming
 
 char stemp[NSTR];
 uint8_t txbuffer[NBUF];
 uint8_t rxbuffer[NBUF];
 FILE* messages = NULL;
+double dbuffer[AC_PACKET];
 
 
 // HELPER ROUTINES
@@ -153,7 +155,7 @@ acerror_t xmit(acdev_t *dev, unsigned int attempts, unsigned int reply){
         acmessage_send(dev, "XMIT: The buffer was not correctly initialized. Aborting in the CS16 step.");
         return ACERR_CORRUPT_BUFFER;
     }
-        
+    
     // cs8 is always required
     txbuffer[0] = checksum8(txbuffer);
     
@@ -276,6 +278,7 @@ acerror_t acconfig(acdev_t *dev, char *filename){
     dev->current_zero_v = 0;
     dev->voltage_slope_nd = 0;
     dev->voltage_zero_v = 0;
+    dev->temp_slope_K = 0;
     
     // Open the configuration file
     fd = fopen(filename, "r");
@@ -359,10 +362,16 @@ acerror_t acconfig(acdev_t *dev, char *filename){
 }
 
 acerror_t acopen(acdev_t *dev){
+    acerror_t err;
+    
     if(dev->handle){
         acmessage_send(dev, "ACOPEN: The connection already appears to be open.");
-        return ACERR_ALREADY_OPEN;
+        return ACERR_DEV_ALREADY_OPEN;
     }
+    
+    // Initialize the stream state parameters
+    dev->aistr_active = 0;
+    dev->aistr_backlog = 0;
     
     // Find a U3; it should be the only LJ device.
     dev->handle = LJUSB_OpenDevice(1, 0, U3_PRODUCT_ID);
@@ -370,6 +379,52 @@ acerror_t acopen(acdev_t *dev){
         acmessage_send(dev, "ACOPEN: Open operation failed. Check device connection.");
         return ACERR_OPEN_FAILED;
     }
+    
+    // Use ConfigU3 command to retrieve version information
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 0x0A;
+    txbuffer[3] = 0x08;
+    txbuffer[6] = 0x00;
+    txbuffer[7] = 0x00;
+    err = xmit(dev,1,38);
+    if(err){
+        acmessage_send(dev, "ACINIT: Failed to read device version information.");
+        return err;
+    }
+    
+    dev->firmware_version = rxbuffer[10] + ((float) rxbuffer[9]) / 100;
+    dev->bootloader_version = rxbuffer[12] + ((float) rxbuffer[11]) / 100;
+    dev->hardware_version = rxbuffer[14] + ((float) rxbuffer[13]) / 100;
+    dev->serial_number = *((unsigned int*) &rxbuffer[15]);
+    
+    // Get calibration information
+    // Use the ReadMem command to read the analog input calibration
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 0x01;
+    txbuffer[3] = 0x2D;
+    txbuffer[6] = 0x00;
+    txbuffer[7] = 0x00;   // Block 0
+    err = xmit(dev,1,40);
+    if(err){
+        acmessage_send(dev, "ACINIT: Failed while loading device analog input calibration.");
+        return err;
+    }
+    dev->ain_slope_v = f64_to_double(&rxbuffer[8]);
+    dev->ain_offset_v = f64_to_double(&rxbuffer[16]);
+    
+    // Use the ReadMem command to read the temperature calibration
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 0x01;
+    txbuffer[3] = 0x2D;
+    txbuffer[6] = 0x00;
+    txbuffer[7] = 0x02;   // Block 2
+    err = xmit(dev,1,40);
+    if(err){
+        acmessage_send(dev, "ACINIT: Failed while loading device analog input calibration.");
+        return err;
+    }
+    dev->temp_slope_K = f64_to_double(&rxbuffer[8]);
+    
     return ACERR_NONE;
 }
 
@@ -378,10 +433,10 @@ acerror_t acopen(acdev_t *dev){
  *  DEV is the ACDEV_T device struct pointer.  Before calling ACINIT,
  * the application is responsible for initializing values of the struct
  * dev->handle must be set to NULL before
- *  initialization, or an ACERR_ALREADY_OPEN error will be raised.
+ *  initialization, or an ACERR_DEV_ALREADY_OPEN error will be raised.
  * 
  *  Errors:
- *  ACERR_ALREADY_OPEN  The device handle (dev->handle) was not NULL.
+ *  ACERR_DEV_ALREADY_OPEN  The device handle (dev->handle) was not NULL.
  *  ACERR_OPEN_FAILED   The LJUSB_OpenDevice failed.
  */
 acerror_t acinit(acdev_t *dev){
@@ -500,53 +555,6 @@ acerror_t acinit(acdev_t *dev){
         return ACERR_CONFIG_FAILED;
     }
     
-    // Use ConfigU3 command to retrieve version information
-    txbuffer[1] = 0xF8;
-    txbuffer[2] = 0x0A;
-    txbuffer[3] = 0x08;
-    txbuffer[6] = 0x00;
-    txbuffer[7] = 0x00;
-    err = xmit(dev,1,38);
-    if(err){
-        acmessage_send(dev, "ACINIT: Failed to read device version information.");
-        return err;
-    }
-    
-    dev->firmware_version = rxbuffer[10] + ((float) rxbuffer[9]) / 100;
-    dev->bootloader_version = rxbuffer[12] + ((float) rxbuffer[11]) / 100;
-    dev->hardware_version = rxbuffer[14] + ((float) rxbuffer[13]) / 100;
-    dev->serial_number = *((unsigned int*) &rxbuffer[15]);
-    
-    // Get calibration information
-    // Use the ReadMem command to read the analog input calibration
-    txbuffer[1] = 0xF8;
-    txbuffer[2] = 0x01;
-    txbuffer[3] = 0x2D;
-    txbuffer[6] = 0x00;
-    txbuffer[7] = 0x00;   // Block 0
-    err = xmit(dev,1,40);
-    if(err){
-        acmessage_send(dev, "ACINIT: Failed while loading device analog input calibration.");
-        return err;
-    }
-    
-    dev->ain_slope_v = f64_to_double(&rxbuffer[8]);
-    dev->ain_offset_v = f64_to_double(&rxbuffer[16]);
-    
-    // Use the ReadMem command to read the temperature calibration
-    txbuffer[1] = 0xF8;
-    txbuffer[2] = 0x01;
-    txbuffer[3] = 0x2D;
-    txbuffer[6] = 0x00;
-    txbuffer[7] = 0x02;   // Block 2
-    err = xmit(dev,1,40);
-    if(err){
-        acmessage_send(dev, "ACINIT: Failed while loading device analog input calibration.");
-        return err;
-    }
-    
-    dev->temp_slope_K = f64_to_double(&rxbuffer[8]);
-    
     // Use ConfigIO to set the EIOAnalog register
     txbuffer[1] = 0xF8;
     txbuffer[2] = 0x03;
@@ -659,6 +667,11 @@ acerror_t acset(acdev_t *dev, acpin_t pin, int value){
     acerror_t err;
     uint8_t write;
     
+    if(!dev->handle){
+        acmessage_send(dev, "ACSET: Device connection is not open.");
+        return ACERR_DEV_NOT_OPEN;
+    }
+    
     write = pin + AC_EIO_OFFSET;
     if(value)
         write |= AC_BITSTATE_MASK;
@@ -686,6 +699,209 @@ acerror_t acset(acdev_t *dev, acpin_t pin, int value){
         return ACERR_CONFIG_FAILED;
     }
 
+    
+    return ACERR_NONE;
+}
+
+
+acerror_t acget(acdev_t *dev, acpin_t pin, double *value){
+    unsigned int ii;
+    acerror_t err;
+    uint8_t read;
+    
+    if(!dev->handle){
+        acmessage_send(dev, "ACGET: Device connection is not open.");
+        return ACERR_DEV_NOT_OPEN;
+    }else if(   !(
+            pin == ACPIN_CS ||
+            pin == ACPIN_VS ||
+            pin == ACPIN_T  )){
+        sprintf(stemp, "ACGET: Illegal analog input pin number: %d", pin);
+        acmessage_send(dev, stemp);
+        return ACERR_PARAM_ERROR;
+    }
+    
+    // Use the FEEDBACK command to query the AI channel
+    // 0x40 mask uses long settling time and slow ADC
+    read = 0x40 | (pin + AC_EIO_OFFSET);
+    
+    txbuffer[1] = 0xF8;
+    txbuffer[2] = 2;
+    txbuffer[3] = 0x00;
+    
+    txbuffer[6] = 0x04;     // Echo byte
+    txbuffer[7] = 0x01;     // AI read
+    //txbuffer[8] = 0x08;
+    txbuffer[8] = read;
+    txbuffer[9] = 0x1F;     // Single-ended
+    
+    err = xmit(dev,1,12);
+    
+    if(err){
+        acmessage_send(dev, "ACGET: Communication failed.");
+        return err;
+    }else if(rxbuffer[6]){
+        sprintf(stemp, "ACGET: Failed with LJ error code: 0x%02x\n"
+                "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes",
+                rxbuffer[6]);
+        acmessage_send(dev, stemp);
+        return ACERR_CONFIG_FAILED;
+    }
+
+    // Fetch the raw ADC value
+    *value = *((uint16_t *) &rxbuffer[9]);
+    
+    
+    // Perform the conversion
+    if(pin == ACPIN_CS){
+        // Calculate calibrated voltage
+        *value = (*value) * dev->ain_slope_v + dev->ain_offset_v;
+        // Apply the measurement board calibration
+        *value = ((*value) - dev->current_zero_v) * dev->current_slope_av;
+    }else if(pin == ACPIN_VS){
+        // Calculate calibrated voltage
+        *value = (*value) * dev->ain_slope_v + dev->ain_offset_v;
+        // Apply the measurement board calibration
+        *value = ((*value) - dev->voltage_zero_v) * dev->voltage_slope_nd;
+    }else if(pin == ACPIN_T){
+        *value = (*value) * dev->temp_slope_K;
+    }
+    return ACERR_NONE;
+
+}
+
+
+acerror_t acstream_start(acdev_t *dev){
+    acerror_t err;
+    if(!dev->handle){
+        acmessage_send(dev, "ACGET: Device connection is not open.");
+        return ACERR_DEV_NOT_OPEN;
+    }
+    
+    // First, configure the stream
+    // Use the STREAM CONFIG command
+    txbuffer[1] = 0xF8;             // Long format
+    txbuffer[2] = AC_CHANNELS + 3;
+    txbuffer[3] = 0x11;             // Command
+    
+    txbuffer[6] = AC_CHANNELS;      // Number of channels
+    txbuffer[7] = AC_PACKET;         // Samples / packet
+    txbuffer[8] = 0x00;
+    txbuffer[9] = 0x04;             // 4MHz clock, divide by 256, 12.8 resolution
+    *(uint16_t*) &txbuffer[10] = 15625;  // Scan interval (one second)
+    
+    // Set the channels
+    txbuffer[12] = ACPIN_CS + AC_EIO_OFFSET;
+    txbuffer[13] = 31;
+    
+    txbuffer[14] = ACPIN_VS + AC_EIO_OFFSET;
+    txbuffer[15] = 31;
+    
+    txbuffer[16] = 30;
+    txbuffer[17] = 31;
+    
+    err = xmit(dev,1,8);
+    
+    if(err){
+        acmessage_send(dev, "ACSTREAM_START: Communication failed while configuring the measurement.");
+        return err;
+    }else if(rxbuffer[6]){
+        sprintf(stemp, "ACSTREAM_START: Configuration failed with LJ error code: 0x%02x\n"
+                "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes",
+                rxbuffer[6]);
+        acmessage_send(dev, stemp);
+        return ACERR_CONFIG_FAILED;
+    }
+    
+    txbuffer[1] = 0xA8;
+    err = xmit(dev,1,4);
+    
+    if(err){
+        acmessage_send(dev, "ACSTREAM_START: Communication failed while starting the measurement.");
+        return err;
+    }else if(rxbuffer[2]){
+        sprintf(stemp, "ACSTREAM_START: StreamStart failed with LJ error code: 0x%02x\n"
+                "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes",
+                rxbuffer[2]);
+        acmessage_send(dev, stemp);
+        return ACERR_AISTART_FAILED;
+    }
+    
+    dev->aistr_active = 1;
+    
+    return ACERR_NONE;
+}
+
+acerror_t acstream_read(acdev_t *dev, double *data){
+    unsigned int result, sample, ii, jj;
+    double x;
+    acerror_t err;
+
+    // Streaming does not require a transmit/response cycle; only read
+    result = LJUSB_StreamTO(dev->handle, rxbuffer, STREAM_NBUF, 5500);
+    
+    buffer_dump(rxbuffer);
+    
+    if(result != STREAM_NBUF){
+        sprintf(stemp, "ACSTREAM_READ: Expected %d bytes, got %d.", STREAM_NBUF, result);
+        acmessage_send(dev, stemp);
+        return ACERR_RX_FAILURE;
+    }else if(rxbuffer[11]){
+        sprintf(stemp, "ACSTREAM_READ: StreamData failed with LJ error code: 0x%02x\n"
+                "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes",
+                rxbuffer[11]);
+        acmessage_send(dev, stemp);
+        return ACERR_AIREAD_FAILED;
+    }
+    
+    ii = 12;    // ii is the position in the rxbuffer
+    jj = 0;     // jj is the position in the data array
+    // Apply calibrations
+    for(sample=0; sample<AC_SAMPLES_PER_READ; sample++){
+        // Current
+        x = (double) (*(uint16_t*) &rxbuffer[ii]);
+        x = dev->ain_slope_v * x + dev->ain_offset_v;
+        x = dev->current_slope_av * (x - dev->current_zero_v);
+        data[jj] = x;
+        ii += 2;
+        jj += 1;
+        // Voltage
+        x = (double) (*(uint16_t*) &rxbuffer[ii]);
+        x = dev->ain_slope_v * x + dev->ain_offset_v;
+        x = dev->voltage_slope_nd * (x - dev->voltage_zero_v);
+        data[jj] = x;
+        ii += 2;
+        jj += 1;
+        // Temperature
+        x = (double) (*(uint16_t*) &rxbuffer[ii]);
+        x = dev->temp_slope_K * x;
+        data[jj] = x;
+        ii += 2;
+        jj += 1;
+    }
+    dev->aistr_backlog = rxbuffer[STREAM_NBUF-2];
+    
+    return ACERR_NONE;
+}
+
+acerror_t acstream_stop(acdev_t *dev){
+    acerror_t err;
+    
+    txbuffer[1] = 0xB0;
+    err = xmit(dev,1,4);
+    
+    if(err){
+        acmessage_send(dev, "ACSTREAM_STOP: Communication failed while stopping the measurement.");
+        return err;
+    }else if(rxbuffer[2]){
+        sprintf(stemp, "ACSTREAM_STOP: StreamStop failed with LJ error code: 0x%02x\n"
+                "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes",
+                rxbuffer[2]);
+        acmessage_send(dev, stemp);
+        return ACERR_AISTOP_FAILED;
+    }
+    
+    dev->aistr_active = 0;
     
     return ACERR_NONE;
 }

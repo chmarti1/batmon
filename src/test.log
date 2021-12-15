@@ -28,3 +28,47 @@
 [1639061039] ACINIT: Open operation failed. Check device connection.
 [1639061050] ACINIT: Open operation failed. Check device connection.
 [1639285088] ACINIT: Open operation failed. Check device connection.
+[1639571892] ACSTREAM_START: StreamStart failed with LJ error code: 0x30
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639571897] ACSTREAM_READ: StreamData failed with LJ error code: 0x30
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639571971] ACSTREAM_START: StreamStart failed with LJ error code: 0x30
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639571977] ACSTREAM_READ: StreamData failed with LJ error code: 0x30
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639573300] ACSTREAM_START: StreamStart failed with LJ error code: 0x30
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639573306] ACSTREAM_READ: StreamData failed with LJ error code: 0x30
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639573827] ACSTREAM_READ: Communication failed while streaming the measurement.
+[1639573842] ACSTREAM_READ: Communication failed while streaming the measurement.
+[1639573898] ACSTREAM_READ: Communication failed while streaming the measurement.
+[1639574146] ACSTREAM_READ: Communication failed while streaming the measurement.
+[1639575072] ACSTREAM_READ: Expected 44 bytes, got 0.
+[1639575098] ACSTREAM_READ: Expected 44 bytes, got 0.
+[1639575152] ACSTREAM_READ: Expected 44 bytes, got 0.
+[1639575423] ACSTREAM_READ: Expected 44 bytes, got 24.
+[1639575527] ACSTREAM_READ: Expected 44 bytes, got 24.
+[1639575655] ACSTREAM_READ: StreamData failed with LJ error code: 0x13
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639575678] ACSTREAM_READ: StreamData failed with LJ error code: 0x13
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639575853] ACSTREAM_READ: StreamData failed with LJ error code: 0x13
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639576099] ACSTREAM_READ: StreamData failed with LJ error code: 0x13
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639576134] ACSTREAM_READ: StreamData failed with LJ error code: 0x13
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639576173] ACSTREAM_READ: StreamData failed with LJ error code: 0x13
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639576195] ACSTREAM_READ: StreamData failed with LJ error code: 0x13
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639576376] ACSTREAM_READ: StreamData failed with LJ error code: 0x13
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639576587] ACSTREAM_READ: Expected 20 bytes, got 0.
+[1639576714] ACSTREAM_READ: Expected 20 bytes, got 0.
+[1639576774] ACSTREAM_READ: StreamData failed with LJ error code: 0x07
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639576846] ACSTREAM_READ: StreamData failed with LJ error code: 0x07
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[1639576893] ACSTREAM_READ: Expected 44 bytes, got 0.
