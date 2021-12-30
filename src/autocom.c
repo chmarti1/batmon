@@ -8,6 +8,7 @@
 #define NPARAM 128
 #define TIMEOUT_MS  2000    // The timeout interval in milliseconds
 #define STREAM_NBUF 14+2*AC_PACKET  // The rxbuffer length for streaming
+#define SAMPLE_CLK_HZ   15625
 
 char stemp[NSTR];
 uint8_t txbuffer[NBUF];
@@ -773,10 +774,19 @@ acerror_t acget(acdev_t *dev, acpin_t pin, double *value){
 
 acerror_t acstream_start(acdev_t *dev){
     acerror_t err;
+    uint16_t scan_interval;
     if(!dev->handle){
         acmessage_send(dev, "ACGET: Device connection is not open.");
         return ACERR_DEV_NOT_OPEN;
     }
+    
+    // Calculate the scan interval... This is the number of clock cycles
+    // between scans.  The clock setting is on slow: 
+    //  4MHz / 256 = 15.625kHz
+    scan_interval = (uint16_t) (dev->ts * SAMPLE_CLK_HZ);
+    // Update the time interval to reflect the actual value used
+    dev->ts = (double) scan_interval / SAMPLE_CLK_HZ;
+    
     
     // First, configure the stream
     // Use the STREAM CONFIG command
@@ -788,7 +798,7 @@ acerror_t acstream_start(acdev_t *dev){
     txbuffer[7] = AC_PACKET;         // Samples / packet
     txbuffer[8] = 0x00;
     txbuffer[9] = 0x04;             // 4MHz clock, divide by 256, 12.8 resolution
-    *(uint16_t*) &txbuffer[10] = 15625;  // Scan interval (one second)
+    *(uint16_t*) &txbuffer[10] = scan_interval; 
     
     // Set the channels
     txbuffer[12] = ACPIN_CS + AC_EIO_OFFSET;
@@ -836,9 +846,11 @@ acerror_t acstream_read(acdev_t *dev, double *data){
     unsigned int result, sample, ii, jj;
     double x;
     acerror_t err;
-
+    
     // Streaming does not require a transmit/response cycle; only read
-    result = LJUSB_StreamTO(dev->handle, rxbuffer, STREAM_NBUF, 5500);
+    result = LJUSB_StreamTO(
+            dev->handle, rxbuffer, STREAM_NBUF, 
+            (unsigned int) dev->ts * 1200);     // Add 20% for a timeout interval (in ms)
     
     buffer_dump(rxbuffer);
     
@@ -860,21 +872,21 @@ acerror_t acstream_read(acdev_t *dev, double *data){
     for(sample=0; sample<AC_SAMPLES_PER_READ; sample++){
         // Current
         x = (double) (*(uint16_t*) &rxbuffer[ii]);
-        x = dev->ain_slope_v * x + dev->ain_offset_v;
-        x = dev->current_slope_av * (x - dev->current_zero_v);
+        x = dev->ain_slope * x + dev->ain_offset;
+        x = dev->current_slope * (x - dev->current_zero);
         data[jj] = x;
         ii += 2;
         jj += 1;
         // Voltage
         x = (double) (*(uint16_t*) &rxbuffer[ii]);
-        x = dev->ain_slope_v * x + dev->ain_offset_v;
-        x = dev->voltage_slope_nd * (x - dev->voltage_zero_v);
+        x = dev->ain_slope * x + dev->ain_offset;
+        x = dev->voltage_slope * (x - dev->voltage_zero);
         data[jj] = x;
         ii += 2;
         jj += 1;
         // Temperature
         x = (double) (*(uint16_t*) &rxbuffer[ii]);
-        x = dev->temp_slope_K * x;
+        x = dev->temp_slope * x;
         data[jj] = x;
         ii += 2;
         jj += 1;

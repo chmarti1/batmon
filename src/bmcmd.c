@@ -17,6 +17,41 @@ int main(int argc, char* argv[]){
     char stemp[128];
     acerror_t err;
     acdev_t dev;
+    char help_text[] = \
+"BMCMD - Battery monitor command\n"\
+"\n"\
+"bmcmd [COMMAND [ARGUMENT [ARGUMENT...]]] [COMMAND ...]\n"\
+"\n"\
+"  Used to interact with the battery monitor system from the command \n"\
+"  line. Parses whitespace-separated commands from left-to-right. Some\n"\
+"  commands accept arguments that define their behavior.\n"\
+"\n"\
+"**COMMANDS**\n"\
+"help\n"\
+"  Prints this help text, and does not exit. Requires no arguments.\n"\
+"\n"\
+"init\n"\
+"  Initializes the DAQ.  Requires no arguments.\n"\
+"  This includes setting all the pin I/O settings and setting the digital\n"\
+"  outputs to be off.\n"\
+"\n"\
+"alarm [on|off]\n"\
+"  Sets the alarm status. Requires a single argument \"on\" or \"off\".\n"\
+"\n"\
+"ind[n] [on|off]\n"\
+"  Sets the state of one of the indicator LEDs. Requires a single argument\n"\
+"  \"on\" or \"off\". n should be replaced with the indicator index (0-3)\n"\
+"    e.g. bmcmd ind0 on\n"\
+"\n"\
+"voltage\n"\
+"  Return the terminal voltage measured\n"\
+"\n"\
+"current\n"\
+"  Return the current measured. Positive current is leaving the battery.\n"
+"\n"
+"temperature\n"\
+"show\n"\
+"\n"
 
     acmessage_set(stderr);
     // Open the configuration file
@@ -34,8 +69,11 @@ int main(int argc, char* argv[]){
     // Loop over the parameters
     for(ii=1; ii<argc; ii++){
         err = ACERR_NONE;
+        // HELP
+        if(streq(argv[ii], "help")){
+            sprintf(help_text);
         // INIT
-        if(streq(argv[ii], "init")){
+        }else if(streq(argv[ii], "init")){
             err = acinit(&dev);
         // ALARM
         }else if(streq(argv[ii], "alarm")){

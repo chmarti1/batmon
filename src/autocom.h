@@ -144,6 +144,8 @@ typedef struct _acdev_t {
     // Files
     FILE *logfile;
     FILE *statfile;
+    
+    double ts;  // Sample period in seconds
 
     // Descriptive
     float firmware_version;
@@ -152,16 +154,17 @@ typedef struct _acdev_t {
     unsigned int serial_number;
     // Calibration
     // Device calibration
-    double ain_slope_v;
-    double ain_offset_v;
+    double ain_slope;
+    double ain_offset;
     // Device temperature calibration
-    double temp_slope_K;
+    double temp_slope;
     // Current
-    double current_slope_av;
-    double current_zero_v;
+    double current_slope;
+    double current_zero;
     // Voltage
-    double voltage_slope_nd;
-    double voltage_zero_v;
+    double voltage_slope;
+    double voltage_zero;
+        
     // Stream status parameters
     unsigned int aistr_backlog;
     unsigned int aistr_active:1;
