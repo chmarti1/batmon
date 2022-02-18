@@ -1,0 +1,26 @@
+INSTALL=/usr/bin
+BMCMD=($INSTALL)/bmcmd
+HOME=/var/batmon
+USER=batmon
+
+test.bin: test.c autocom.o
+	gcc -Wall -o test.bin autocom.o test.c -lm -llabjackusb
+
+bmcmd.bin: bmcmd.c autocom.o 
+	gcc -Wall -o bmcmd.bin autocom.o bmcmd.c -lm -llabjackusb
+
+autocom.o: autocom.c autocom.h
+	gcc -Wall -c autocom.c -o autocom.o
+
+install: bmcmd.bin
+	cp -f bmcmd.bin ($BMCMD)
+	chown root:batmon ($BMCMD)
+	chmod 770 ($BMCMD)
+	adduser --system --group --home ($HOME) ($USER)
+	chmod 775 ($HOME)
+
+uninstall:
+	rm -f ($BMCMD)
+	deluser ($USER)
+	delgroup ($USER)
+	rm -rf ($HOME)

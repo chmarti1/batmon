@@ -1,0 +1,5 @@
+# To do
+
+- Re-configure the acdev_t file handlers to use string paths instead of FILE*
+- Re-write the acinit() function to use PortDir/State instead of PinDir/State
+- Write batmon!

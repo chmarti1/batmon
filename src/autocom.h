@@ -12,18 +12,21 @@
 #include <labjackusb.h>
 #include <stdio.h>
 #include <stdint.h>
+#include "chargemodel.h"
 
 // Analog stream prameters
-#define AC_SAMPLES_PER_READ     5
+#define AC_SAMPLES_PER_PACKET   5
 #define AC_CHANNELS             3
-#define AC_PACKET               AC_SAMPLES_PER_READ * AC_CHANNELS
+#define AC_PACKET               AC_SAMPLES_PER_PACKET * AC_CHANNELS
+#define AC_BITSTATE_MASK        0x80        // Pin 7 is the bit state/direction bit in the bit direction/state commands
+#define AC_EIO_OFFSET           8           // The EIO pins are 8-15, so there is an offset of 8 for the pin numbers.
+#define AC_STRLEN               256         // The longest string length allowed
+
 typedef enum _acchannel_t {
     ACCHAN_CURRENT = 0,
     ACCHAN_VOLTAGE = 1,
     ACCHAN_TEMPERATURE = 2,
 } acchannel_t;
-
-#define AC_EIO_OFFSET  8
 
 /* ACPIN_T - The pin number type
  *  Establishes constants for the pin numbers
@@ -40,12 +43,6 @@ typedef enum _acpin_t {
     ACPIN_T =       30 - AC_EIO_OFFSET,
 } acpin_t;
 
-// Build an EIO Analog mask
-#define AC_EIOAIN_MASK  (1<<ACPIN_CS | 1<<ACPIN_VS)
-#define AC_BITSTATE_MASK  0x80
-
-#define AC_ADCCLK_HZ    15625.0
-#define AC_ADCCLK_DIVISOR
 
 /* ACERROR_T- the error code type
  *  Establishes constants for function return values
@@ -64,86 +61,38 @@ typedef enum _acerror_t {
     // Configuration errors
     ACERR_CONFIG_FILE =     0x20,       // Configuration file was not opened
     ACERR_CONFIG_SYNTAX =   0x21,       // Illegally formatted configuration file
-    ACERR_LOG_FILE =        0x22,       // Could not open the logfile
-    ACERR_STAT_FILE =       0x23,       // Could not open the stat file
+    ACERR_LSD_FILE =        0x22,       // Could not open the log, stat, or datafile
 
     // Init/Open Errors
-    ACERR_DEV_ALREADY_OPEN =    0x30,       // Init was run twice
+    ACERR_DEV_ALREADY_OPEN = 0x30,      // Init was run twice
     ACERR_OPEN_FAILED =     0x31,       // Open operation failed
     ACERR_CONFIG_FAILED =   0x32,       // Failed while configuring IO
     
     // Stream Errors
-    ACERR_AICONFIG_FAILED = 0x40,       
+    ACERR_AICONFIG_FAILED = 0x40,
     ACERR_AISTART_FAILED =  0x41,
     ACERR_AIREAD_FAILED =   0x42,
     ACERR_AISTOP_FAILED =   0x43,
     
 } acerror_t;
 
+// These are masks constructed from the relevant EIO pin numbers
+// --> EIO Analog input mask 8-bits with 1 for AIN pins
+#define AC_EIOAIN_MASK  (1<<ACPIN_CS | 1<<ACPIN_VS) // These are the analog
+// --> EIO Digital output mask 8-bits with 1 for digital outputs
+#define AC_EIODOUT_MASK (1<<ACPIN_ALARM | 1<<ACPIN_CS | 1<<ACPIN_IND0 | 1<<ACPIN_IND1 | 1<<ACPIN_IND2 | 1<<ACPIN_IND3)
+
+
 /* ACDEV_T - The device struct
  * 
- *  The device struct tracks values relevant to the DAQ. Below is a list
- * of the members, a description of their purpose, and lists of the 
- * functions responsible for initializing, setting, and that depend on
- * the member's value.
- * 
- * handle
- *  initialized: application
- *  set: acinit, acclose
- *  used: all communication
- * 
- * The handle is a pointer used by the LJUSB driver as a device handle. 
- * It should be set to NULL to indicate that the connection is closed. 
- * Otherwise, it will be set to a value returned by the LJUSB_OpenDevice 
- * function.  The application is responsible for initializing it to NULL
- * to prevent an error in acinit().
- * 
- * firmware_version
- * bootloader_version
- * hardware_version
- * serial_number
- *  initialized: acinit
- *  set: acinit
- *  used: application
- * 
- * The version numbers are floating point numbers indicating the various
- * versions reported by the U3.  The serial number is an unsigned 
- * integer indicating the device serial number reported by the U3.
- * These are not used by the interface, but are available to the 
- * application if needed.
- * 
- * ain_slope_v
- * ain_offset_v
- * temp_slope_K
- *  initialized: acinit
- *  set: acinit
- *  used: acstream_read
- * 
- * In the initialization process, the device's calibration memory is
- * queried for its raw calibration coefficients.  These are used to 
- * convert ADC counts into analog voltage measured at the terminals and
- * temperature reported by the internal temperature sensor.  The U3 has
- * separate coefficients for differential and single-ended measurements;
- * these are for single-ended measurements.  The units are in 
- * volts/count for slope, volts for offset, and K/count for temperature
- * slope.
- * 
- * current_slope_av
- * current_zero_v
- * voltage_slope_nd
- * voltage_zero_v
- *  initialized: application
- *  set: application
- *  used: acstream_read
- * 
- * The application is responsible for setting values for 
  */
 typedef struct _acdev_t {
     // Device handle
     HANDLE handle;
     // Files
-    FILE *logfile;
-    FILE *statfile;
+    char logfile[AC_STRLEN];
+    char statfile[AC_STRLEN];
+    char datafile[AC_STRLEN];
     
     double ts;  // Sample period in seconds
 
@@ -164,7 +113,13 @@ typedef struct _acdev_t {
     // Voltage
     double voltage_slope;
     double voltage_zero;
-        
+    
+    // data record interval
+    double tdata;
+    
+    // Chargemodel struct
+    cmbat_t battery;
+    
     // Stream status parameters
     unsigned int aistr_backlog;
     unsigned int aistr_active:1;
@@ -207,6 +162,9 @@ acerror_t acmessage_set(FILE* target);
 acerror_t acmessage_send(acdev_t *dev, char *text);
 
 /* ACCONFIG - Load a device configuration file
+ * 
+ * This initializes the device configuration struct and all its members
+ * (including the battery model) before loading the configuration file.
  */
 acerror_t acconfig(acdev_t *dev, char *filename);
 
@@ -262,12 +220,32 @@ acerror_t acinit(acdev_t *dev);
  */
 acerror_t acclose(acdev_t *dev);
 
+
+/* ACSHOW - Prints a summary of configuration and device parameters to
+ *  stdout.
+ */
 acerror_t acshow(acdev_t *dev);
 
+/* ACSET - Set a digital output
+ * 
+ * The pin enumerated type indicates the pin number to set. The integer
+ * is interpreted as True for any non-zero value and False for zero.
+ */
 acerror_t acset(acdev_t *dev, acpin_t pin, int value);
 
+/* ACGET - Get an analog input
+ * 
+ * The pin enumerated type indicates which input to measure. VALUE is 
+ * used to return the result in the appropriate calibrated units.  
+ *      Pin     unit    Description
+ *  ACPIN_CS    (A)     Current signal
+ *  ACPIN_VS    (V)     Terminal voltage signal
+ *  ACPIN_T     (K)     Temperature
+ */
 acerror_t acget(acdev_t *dev, acpin_t pin, double *value);
 
+/* ACSTREAM_START - Starts continuous analog measurements
+ */
 acerror_t acstream_start(acdev_t *dev);
 
 acerror_t acstream_read(acdev_t *dev, double *data);

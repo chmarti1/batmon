@@ -4,13 +4,11 @@
 #include <time.h>
 
 #define NBUF 256            // The maximum number of bytes for buffers
-#define NSTR 256
-#define NPARAM 128
 #define TIMEOUT_MS  2000    // The timeout interval in milliseconds
 #define STREAM_NBUF 14+2*AC_PACKET  // The rxbuffer length for streaming
 #define SAMPLE_CLK_HZ   15625
 
-char stemp[NSTR];
+char stemp[AC_STRLEN];
 uint8_t txbuffer[NBUF];
 uint8_t rxbuffer[NBUF];
 FILE* messages = NULL;
@@ -253,33 +251,43 @@ acerror_t acmessage_set(FILE* target){
 
 acerror_t acmessage_send(acdev_t *dev, char *text){
     time_t now;
+    FILE *lfd;
+    
     now = time(NULL);
     if(messages)
         fprintf(messages, "%s\n", text);
-    if(dev->logfile)
-        fprintf(dev->logfile, "[%d] %s\n", (int) now, text);
+    // If the logfile is defined, append to it
+    if(dev->logfile[0]){
+        if(ldf = fopen(dev->logfile,"a")){
+            fprintf(lfd, "[%d] %s\n", (int) now, text);
+            fclose(ldf);
+        }else if(messages)
+            fprintf(messages, "ACMESSAGE: Failed to write to log file\n    %s\n", dev->logfile);
+    }
     return ACERR_NONE;
 }
 
 acerror_t acconfig(acdev_t *dev, char *filename){
-    int result, count;
-    char param[NPARAM], value[NPARAM];
-    uint8_t float_flag;
-    double fvalue;
+    int result, count, err;
+    char param[AC_STRLEN], value[AC_STRLEN];
     double *ftarget;
+    char *starget;
     FILE *fd = NULL;
     acerror_t done = ACERR_NONE;
 
     // First, initialize the device parameters that need to be set
     // before running acinit()
     dev->handle = NULL;
-    dev->logfile = NULL;
-    dev->statfile = NULL;
-    dev->current_slope_av = 0;
-    dev->current_zero_v = 0;
-    dev->voltage_slope_nd = 0;
-    dev->voltage_zero_v = 0;
-    dev->temp_slope_K = 0;
+    dev->datafile[0] = '\0';
+    dev->logfile[0] = '\0';
+    dev->statfile[0] = '\0';
+    dev->current_slope = 0;
+    dev->current_zero = 0;
+    dev->voltage_slope = 0;
+    dev->voltage_zero = 0;
+    dev->temp_slope = 0;
+    
+    cminit(&dev->battery);
     
     // Open the configuration file
     fd = fopen(filename, "r");
@@ -290,14 +298,14 @@ acerror_t acconfig(acdev_t *dev, char *filename){
     }
     
     for(count=1; !feof(fd); count++){
-        result = fscanf(fd, "%s %[^\n]", param, value);
+        result = fscanf(fd, "%256s %256[^\n]", param, value);
         
         if(param[0] != '#' && result != 2 && !feof(fd)){
             sprintf(stemp, "ACCONFIG: Parameter-value pair number %d was illegal. (%d)", count, result);
             acmessage_send(dev, stemp);
-            sprintf(stemp, "          param: %s", param);
+            sprintf(stemp, "          param: %70s", param);
             acmessage_send(dev, stemp);
-            sprintf(stemp, "          value: %s", value);
+            sprintf(stemp, "          value: %70s", value);
             acmessage_send(dev, stemp);
             return ACERR_CONFIG_SYNTAX;
         }
@@ -307,57 +315,53 @@ acerror_t acconfig(acdev_t *dev, char *filename){
         // not NULL when parsing is complete, then the value will be
         // converted into a float.
         ftarget = NULL;
+        starget = NULL;
         if(param[0] == '#'){
             // This is a comment.  Do nothing.
         }else if(streq(param, "current_slope")){
-            ftarget = &dev->current_slope_av;
+            ftarget = &dev->current_slope;
         }else if(streq(param, "current_zero")){
-            ftarget = &dev->current_zero_v;
+            ftarget = &dev->current_zero;
         }else if(streq(param, "voltage_slope")){
-            ftarget = &dev->voltage_slope_nd;
+            ftarget = &dev->voltage_slope;
         }else if(streq(param, "voltage_zero")){
-            ftarget = &dev->voltage_zero_v;
+            ftarget = &dev->voltage_zero;
+        }else if(streq(param, "tdata")){
+            ftarget = &dev->tdata;
         }else if(streq(param, "logfile")){
-            if(dev->logfile){
-                sprintf(stemp, "ACCONFIG: Multiple entries for LOGFILE in: %s", value);
-                acmessage_send(dev, stemp);
-                // Nonfatal
-                done = ACERR_LOG_FILE;
-            }else{
-                dev->logfile = fopen(value, "a");
-                if(!dev->logfile){
-                    sprintf(stemp, "ACCONFIG: Failed to open LOGFILE: %s", value);
-                    acmessage_send(dev, stemp);
-                    return ACERR_LOG_FILE;
-                }
-            }
+            starget = &dev->logfile;
         }else if(streq(param, "statfile")){
-            if(dev->statfile){
-                sprintf(stemp, "ACCONFIG: Multiple entries for STATFILE in: %s", value);
-                acmessage_send(dev, stemp);
-                // Nonfatal
-                done = ACERR_STAT_FILE;
-            }else{
-                dev->statfile = fopen(value, "a");
-                if(!dev->statfile){
-                    sprintf(stemp, "ACCONFIG: Failed to open STATFILE: %s", value);
-                    acmessage_send(dev, stemp);
-                    return ACERR_STAT_FILE;
-                }
-            }
+            starget = &dev->statfile;
+        }else if(streq(param, "datafile")){
+            starget = &dev->datafile;
+        // Battery parameters
         }else{
-            sprintf(stemp, "ACCONFIG: Unrecognized parameter: %s", param);
-            acmessage_send(dev, stemp);
-            return ACERR_CONFIG_SYNTAX;
+            err = cmwrite(&dev->battery, param, value);
+            if(err == 0){
+                // Do nothing - success
+            }else if(err == 1){
+                sprintf(stemp, "ACCONFIG: Unrecognized parameter: %60s", param);
+                acmessage_send(dev, stemp);
+                return ACERR_CONFIG_SYNTAX;
+            }else if(err == 2){
+                sprintf(stemp, "ACCONFIG: Failed to convert battery parameter:\n %60s %60s", param, value);
+                acmessage_send(dev, stemp);
+                return ACERR_CONFIG_SYNTAX;
+            }
         }
+        
         // If the value is floating point
-        if(ftarget && 1 != sscanf(value, "%lf", ftarget)){
-            sprintf(stemp, "ACCONFIG: Non-numerical value for param: %s", param);
-            acmessage_send(dev, stemp);
-            sprintf(stemp, "          value: %s", value);
-            acmessage_send(dev, stemp);
-            return ACERR_CONFIG_SYNTAX;
-        }
+        if(ftarget){
+            if(1 != sscanf(value, "%lf", ftarget)){
+                sprintf(stemp, "ACCONFIG: Non-numerical value for param: %60s", param);
+                acmessage_send(dev, stemp);
+                sprintf(stemp, "          value: %70s", value);
+                acmessage_send(dev, stemp);
+                return ACERR_CONFIG_SYNTAX;
+            }
+        // If the value is a string, move it.
+        }else if(starget)
+            strcpy(starget, value);
     }
     return done;
 }
@@ -410,8 +414,8 @@ acerror_t acopen(acdev_t *dev){
         acmessage_send(dev, "ACINIT: Failed while loading device analog input calibration.");
         return err;
     }
-    dev->ain_slope_v = f64_to_double(&rxbuffer[8]);
-    dev->ain_offset_v = f64_to_double(&rxbuffer[16]);
+    dev->ain_slope = f64_to_double(&rxbuffer[8]);
+    dev->ain_offset = f64_to_double(&rxbuffer[16]);
     
     // Use the ReadMem command to read the temperature calibration
     txbuffer[1] = 0xF8;
@@ -424,7 +428,7 @@ acerror_t acopen(acdev_t *dev){
         acmessage_send(dev, "ACINIT: Failed while loading device analog input calibration.");
         return err;
     }
-    dev->temp_slope_K = f64_to_double(&rxbuffer[8]);
+    dev->temp_slope = f64_to_double(&rxbuffer[8]);
     
     return ACERR_NONE;
 }
@@ -450,10 +454,12 @@ acerror_t acinit(acdev_t *dev){
         return ACERR_DEV_NOT_OPEN;
     }
     
+    
     // Use the FEEDBACK command to set the EIO pin directions and states
     // We'll turn everything on to test the LEDs and we'll turn the U3
     // LED off to signify the test.
-
+    
+    /*  The original code used bit-wise settings
     txbuffer[1] = 0xF8;
     txbuffer[2] = 12;
     txbuffer[3] = 0x00;
@@ -482,59 +488,29 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[ii++] = 0x09; // Turn off the LED
     txbuffer[ii++] = 0x00;
     txbuffer[ii++] = 0x00;
-
-    /*
-    txbuffer[1] = 0xF8;
-    txbuffer[2] = 2;
-    txbuffer[3] = 0x00;
-    txbuffer[6] = 0x01;
-    txbuffer[7] = 0x09;
-    txbuffer[8] = 0x01;
-    txbuffer[9] = 0x00;
     */
-    err = xmit(dev,1,10);
-    
-    if(err){
-        acmessage_send(dev, "ACINIT: Failed to initialize pin states.");
-        return err;
-    }else if(rxbuffer[6]){
-        sprintf(stemp, "ACINIT: Pin initialization failed in frame %d with error code: 0x%02x\n", rxbuffer[7], rxbuffer[6]);
-        acmessage_send(dev, stemp);
-        return ACERR_CONFIG_FAILED;
-    }
-    
-    
-    // Use the FEEDBACK command to set the EIO pin directions and states
-    // We'll turn everything on to test the LEDs and we'll turn the U3
-    // LED off to signify the test.
     txbuffer[1] = 0xF8;
-    txbuffer[2] = 12;
+    txbuffer[2] = 9; // number of data words
     txbuffer[3] = 0x00;
     ii = 6;
     txbuffer[ii++] = 0x00;  // Echo byte
-    txbuffer[ii++] = 0x0D; // Bit direction write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_ALARM + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0D; // Bit direction write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND0 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0D; // Bit direction write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND1 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0D; // Bit direction write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND2 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0D; // Bit direction write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND3 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit state write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_ALARM + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit state write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND0 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit state write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND1 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit direction write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND2 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit direction write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND3 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x09; // Turn off the LED
-    txbuffer[ii++] = 0x00;
-    txbuffer[ii++] = 0x00;
+    txbuffer[ii++] = 29;    // Port direction write
+    txbuffer[ii++] = 0x00;  // FIO write mask
+    txbuffer[ii++] = AC_EIODOUT_MASK;  // EIO write mask
+    txbuffer[ii++] = 0x00;  // CIO write mask
+    txbuffer[ii++] = 0x00;  // FIO direction mask
+    txbuffer[ii++] = AC_EIODOUT_MASK;  // EIO direction mask
+    txbuffer[ii++] = 0x00;  // CIO direction mask
+    txbuffer[ii++] = 27;    // Port state write
+    txbuffer[ii++] = 0x00;  // FIO write mask
+    txbuffer[ii++] = AC_EIODOUT_MASK;  // EIO write mask
+    txbuffer[ii++] = 0x00;  // CIO write mask
+    txbuffer[ii++] = 0x00;  // FIO values
+    txbuffer[ii++] = AC_EIODOUT_MASK;  // EIO values
+    txbuffer[ii++] = 0x00;  // CIO values
+    txbuffer[ii++] = 9;     // LED Write
+    txbuffer[ii++] = 0x00;  // Turn the LED off
+    txbuffer[ii++] = 0x00;  // Extra empty byte to finish the word
     
     /*
     txbuffer[1] = 0xF8;
@@ -557,14 +533,14 @@ acerror_t acinit(acdev_t *dev){
     }
     
     // Use ConfigIO to set the EIOAnalog register
-    txbuffer[1] = 0xF8;
-    txbuffer[2] = 0x03;
-    txbuffer[3] = 0x0B;
-    txbuffer[6] = 0x0c;
-    txbuffer[7] = 0x00;
-    txbuffer[10] = 0x0F;
-    txbuffer[11] = AC_EIOAIN_MASK;
-    err = xmit(dev,4,12);
+    txbuffer[1] = 0xF8; // Extended command
+    txbuffer[2] = 0x03; // # Data words
+    txbuffer[3] = 0x0B; // ConfigIO
+    txbuffer[6] = 0x0c; // Write mask FIO + EIO
+    txbuffer[7] = 0x00; // Reserved
+    txbuffer[10] = 0x0F;    // FIO Analog in
+    txbuffer[11] = AC_EIOAIN_MASK;  // EIO Analog in
+    err = xmit(dev,1,12);
     if(err){
         acmessage_send(dev, "ACINIT: Failed while setting the FIO/EIO IO settings.");
         return err;
@@ -579,19 +555,15 @@ acerror_t acinit(acdev_t *dev){
     txbuffer[3] = 0x00;
     ii = 6;
     txbuffer[ii++] = 0x02;  // Echo byte
-    txbuffer[ii++] = 0x0B; // Bit state write
-    txbuffer[ii++] = (ACPIN_ALARM + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit state write
-    txbuffer[ii++] = (ACPIN_IND0 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit state write
-    txbuffer[ii++] = (ACPIN_IND1 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit direction write
-    txbuffer[ii++] = (ACPIN_IND2 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit direction write
-    txbuffer[ii++] = (ACPIN_IND3 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x09; // Turn on the LED
-    txbuffer[ii++] = 0x01;
-    txbuffer[ii++] = 0x00;
+    txbuffer[ii++] = 27;    // Port state write
+    txbuffer[ii++] = 0x00;  // FIO write mask
+    txbuffer[ii++] = AC_EIODOUT_MASK;  // EIO write mask
+    txbuffer[ii++] = 0x00;  // CIO write mask
+    txbuffer[ii++] = 0x00;  // FIO values
+    txbuffer[ii++] = 0x00;  // EIO values
+    txbuffer[ii++] = 0x00;  // CIO values
+    txbuffer[ii++] = 9;     // LED write
+    txbuffer[ii++] = 0x01;  // Turn the LED on
     
     /*
     txbuffer[1] = 0xF8;
@@ -619,19 +591,8 @@ acerror_t acinit(acdev_t *dev){
 
 
 acerror_t acclose(acdev_t *dev){
-    acerror_t err;
-    int ii;
     
-    // Close files
-    if(dev->logfile){
-        fclose(dev->logfile);
-        dev->logfile = NULL;
-    }
-    if(dev->statfile){
-        fclose(dev->statfile);
-        dev->statfile = NULL;
-    }
-    
+   
     // There isn't much more to do if the deivce is already closed
     if(!dev->handle)
         return ACERR_NONE;
@@ -654,17 +615,16 @@ acerror_t acshow(acdev_t *dev){
         dev->hardware_version,
         dev->serial_number);
     printf("AIN slope (v/bit): %.6e\nAIN offset (v): %.6e\n",
-        dev->ain_slope_v,
-        dev->ain_offset_v);
+        dev->ain_slope,
+        dev->ain_offset);
     printf("Temp slope (K/bit): %.6e\n",
-        dev->temp_slope_K);
+        dev->temp_slope);
         
     return ACERR_NONE;
 }
 
 
 acerror_t acset(acdev_t *dev, acpin_t pin, int value){
-    unsigned int ii;
     acerror_t err;
     uint8_t write;
     
@@ -706,7 +666,6 @@ acerror_t acset(acdev_t *dev, acpin_t pin, int value){
 
 
 acerror_t acget(acdev_t *dev, acpin_t pin, double *value){
-    unsigned int ii;
     acerror_t err;
     uint8_t read;
     
@@ -756,16 +715,16 @@ acerror_t acget(acdev_t *dev, acpin_t pin, double *value){
     // Perform the conversion
     if(pin == ACPIN_CS){
         // Calculate calibrated voltage
-        *value = (*value) * dev->ain_slope_v + dev->ain_offset_v;
+        *value = (*value) * dev->ain_slope + dev->ain_offset;
         // Apply the measurement board calibration
-        *value = ((*value) - dev->current_zero_v) * dev->current_slope_av;
+        *value = ((*value) - dev->current_zero) * dev->current_slope;
     }else if(pin == ACPIN_VS){
         // Calculate calibrated voltage
-        *value = (*value) * dev->ain_slope_v + dev->ain_offset_v;
+        *value = (*value) * dev->ain_slope + dev->ain_offset;
         // Apply the measurement board calibration
-        *value = ((*value) - dev->voltage_zero_v) * dev->voltage_slope_nd;
+        *value = ((*value) - dev->voltage_zero) * dev->voltage_slope;
     }else if(pin == ACPIN_T){
-        *value = (*value) * dev->temp_slope_K;
+        *value = (*value) * dev->temp_slope;
     }
     return ACERR_NONE;
 
@@ -845,7 +804,6 @@ acerror_t acstream_start(acdev_t *dev){
 acerror_t acstream_read(acdev_t *dev, double *data){
     unsigned int result, sample, ii, jj;
     double x;
-    acerror_t err;
     
     // Streaming does not require a transmit/response cycle; only read
     result = LJUSB_StreamTO(

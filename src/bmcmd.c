@@ -3,8 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#define BATTERY_CONFIG "/etc/batmon/battery.conf"
-#define MEASURE_CONFIG "/etc/batmon/measure.conf"
+#define CONFIG "/etc/batmon.conf"
 #define streq(a,b) (strcmp(a,b)==0)
 
 
@@ -51,11 +50,11 @@ int main(int argc, char* argv[]){
 "\n"
 "temperature\n"\
 "show\n"\
-"\n"
+"\n";
 
     acmessage_set(stderr);
     // Open the configuration file
-    if(err = acconfig(&dev, MEASURE_CONFIG)){
+    if(err = acconfig(&dev, CONFIG)){
         sprintf(stemp, "BMCMD: Configuration failed with error 0x%x", err);
         acmessage_send(&dev, stemp);
         return -1;
@@ -71,7 +70,7 @@ int main(int argc, char* argv[]){
         err = ACERR_NONE;
         // HELP
         if(streq(argv[ii], "help")){
-            sprintf(help_text);
+            printf(help_text);
         // INIT
         }else if(streq(argv[ii], "init")){
             err = acinit(&dev);
