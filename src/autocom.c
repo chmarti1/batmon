@@ -5,14 +5,10 @@
 
 #define NBUF 256            // The maximum number of bytes for buffers
 #define TIMEOUT_MS  2000    // The timeout interval in milliseconds
-#define STREAM_NBUF 14+2*AC_PACKET  // The rxbuffer length for streaming
-#define SAMPLE_CLK_HZ   15625
 
 char stemp[AC_STRLEN];
 uint8_t txbuffer[NBUF];
 uint8_t rxbuffer[NBUF];
-FILE* messages = NULL;
-double dbuffer[AC_PACKET];
 
 
 // HELPER ROUTINES
@@ -151,7 +147,7 @@ acerror_t xmit(acdev_t *dev, unsigned int attempts, unsigned int reply){
     if(txcs16 >= 0){
         *(uint16_t*) &txbuffer[4] = (uint16_t) txcs16;
     }else if(txcs16 == -2){
-        acmessage_send(dev, "XMIT: The buffer was not correctly initialized. Aborting in the CS16 step.");
+        acmessage(dev, "XMIT: The buffer was not correctly initialized. Aborting in the CS16 step.",ACLOG_MEDIUM);
         return ACERR_CORRUPT_BUFFER;
     }
     
@@ -171,7 +167,7 @@ acerror_t xmit(acdev_t *dev, unsigned int attempts, unsigned int reply){
             // Check for too many tries
             if(count == attempts){
                 sprintf(stemp, "XMIT: Transmission failed. Attempted (%d) bytes, sent (%ld).", txlength, result);
-                acmessage_send(dev, stemp);
+                acmessage(dev, stemp, ACLOG_MEDIUM);
                 return ACERR_TX_FAILURE;
             }
         // If transmission was successful
@@ -182,18 +178,18 @@ acerror_t xmit(acdev_t *dev, unsigned int attempts, unsigned int reply){
             // Check for a bad checksum reply
             if(rxbuffer[1] == 0xB8){
                 c_flag = 1;
-                acmessage_send(dev, "XMIT: Device detected a bad checksum.");
+                acmessage(dev, "XMIT: Device detected a bad checksum.", ACLOG_MEDIUM);
                 if(count == attempts)
                     return ACERR_BAD_CHECKSUM;
             // Check for no reply
             }else if(rxlength == 0){
-                acmessage_send(dev, "XMIT: No reply.");
+                acmessage(dev, "XMIT: No reply.", ACLOG_MEDIUM);
                 if(count == attempts)
                     return ACERR_RX_FAILURE;
             // Check for an unexpected reply
             }else if(c_flag){
                 sprintf(stemp, "XMIT: Expected %d bytes, received %d.", reply, rxlength);
-                acmessage_send(dev,stemp);
+                acmessage(dev,stemp, ACLOG_MEDIUM);
                 if(count == attempts)
                     return ACERR_RX_LENGTH;
             // If the reply appears valid, compare checksums and length
@@ -204,21 +200,21 @@ acerror_t xmit(acdev_t *dev, unsigned int attempts, unsigned int reply){
                 c_flag = (rxlength != reply);
                 if(c_flag){
                     sprintf(stemp, "XMIT: Aborting. Packet length (%d) does not match the expected length (%d).", rxlength, reply);
-                    acmessage_send(dev, stemp);
+                    acmessage(dev, stemp, ACLOG_MEDIUM);
                     // Automatic failure; do not re-attempt
                     return ACERR_RX_LENGTH;
                 // Check the checksum 8
                 }else if(rxcs8 != rxbuffer[0]){
                     c_flag = 1;
                     sprintf(stemp, "XMIT: Bad checksum 8. Received 0x%02x. Calculated 0x%02x.", rxbuffer[0], rxcs8);
-                    acmessage_send(dev,stemp);
+                    acmessage(dev,stemp, ACLOG_MEDIUM);
                     if(count == attempts)
                         return ACERR_BAD_CHECKSUM;
                 // Check the checksum 16 buffer
                 }else if(rxcs16 >= 0 && rxcs16 != *(uint16_t*) &rxbuffer[4]){
                     c_flag = 1;
                     sprintf(stemp, "XMIT: Bad checksum 16.  Received 0x%04x.  Calculated 0x%04x.", *(uint16_t*) &rxbuffer[4], rxcs16);
-                    acmessage_send(dev, stemp);
+                    acmessage(dev, stemp, ACLOG_MEDIUM);
                     if(count == attempts)
                         return ACERR_RX_FAILURE;
                 }
@@ -238,32 +234,45 @@ acerror_t xmit(acdev_t *dev, unsigned int attempts, unsigned int reply){
  *   accessible by the application.
  */
 
-/* ACMESSAGE - set how error messages will be communicated
- *
- *  TARGET is a file pointer to which descriptive error messages should
- *  be streamed.  It is set to NULL by default, but can be redirrected
- *  as desired.  If it is set to NULL, then error messaging is disabled.
- */
-acerror_t acmessage_set(FILE* target){
-    messages = target;
-    return ACERR_NONE;
-}
 
-acerror_t acmessage_send(acdev_t *dev, char *text){
+acerror_t acmessage(acdev_t *dev, char *text, acloglevel_t level){
     time_t now;
     FILE *lfd;
+    char close_f;   // Close the file?
+    static char stemp[AC_STRLEN];
     
+    if(level > dev->loglevel && level >= 0)
+        return ACERR_NONE;
+    
+    // What is the current time?
     now = time(NULL);
-    if(messages)
-        fprintf(messages, "%s\n", text);
-    // If the logfile is defined, append to it
+    
+    close_f = 0;
+    // If a log file is specified, try to open it
     if(dev->logfile[0]){
-        if(ldf = fopen(dev->logfile,"a")){
-            fprintf(lfd, "[%d] %s\n", (int) now, text);
-            fclose(ldf);
-        }else if(messages)
-            fprintf(messages, "ACMESSAGE: Failed to write to log file\n    %s\n", dev->logfile);
+        // If the open operation succeeds
+        if(lfd = fopen(dev->logfile,"a")){
+            // We'll need to remember to close it later
+            close_f = 1;
+        // If the open operation fails, complain to the user, and revert
+        // to standard output
+        }else{
+            fprintf(stderr, "ACMESSAGE: Failed to write to log file\n    %s\n", dev->logfile);            
+            lfd = stdout;
+        }
+    // If no log file is given, just use standard output
+    }else{
+        lfd = stdout;
     }
+    
+    // Write the message
+    strftime(stemp, sizeof(stemp), "[%F %H:%M:%S]", localtime(&now));
+    fprintf(lfd, "%s %s\n", stemp, text);
+    
+    // Close the file if necessary
+    if(close_f)
+        fclose(lfd);
+    
     return ACERR_NONE;
 }
 
@@ -286,14 +295,14 @@ acerror_t acconfig(acdev_t *dev, char *filename){
     dev->voltage_slope = 0;
     dev->voltage_zero = 0;
     dev->temp_slope = 0;
-    
-    cminit(&dev->battery);
-    
+    dev->loglevel = ACLOG_LOW;
+    dev->aistr_active = 0;
+       
     // Open the configuration file
     fd = fopen(filename, "r");
     if(!fd){
         sprintf(stemp, "ACCONFIG: Failed to open file: %s", filename);
-        acmessage_send(dev, stemp);
+        acmessage(dev, stemp,ACLOG_ESSENTIAL);
         return ACERR_CONFIG_FILE;
     }
     
@@ -302,12 +311,14 @@ acerror_t acconfig(acdev_t *dev, char *filename){
         
         if(param[0] != '#' && result != 2 && !feof(fd)){
             sprintf(stemp, "ACCONFIG: Parameter-value pair number %d was illegal. (%d)", count, result);
-            acmessage_send(dev, stemp);
+            acmessage(dev, stemp, ACLOG_ESSENTIAL);
             sprintf(stemp, "          param: %70s", param);
-            acmessage_send(dev, stemp);
+            acmessage(dev, stemp, ACLOG_ESSENTIAL);
             sprintf(stemp, "          value: %70s", value);
-            acmessage_send(dev, stemp);
+            acmessage(dev, stemp, ACLOG_ESSENTIAL);
             return ACERR_CONFIG_SYNTAX;
+        }else if(result == 0){
+            break;
         }
         
         // If the value is a floating point, ftarget is a double pointer
@@ -334,35 +345,41 @@ acerror_t acconfig(acdev_t *dev, char *filename){
             starget = &dev->statfile;
         }else if(streq(param, "datafile")){
             starget = &dev->datafile;
-        // Battery parameters
-        }else{
-            err = cmwrite(&dev->battery, param, value);
-            if(err == 0){
-                // Do nothing - success
-            }else if(err == 1){
-                sprintf(stemp, "ACCONFIG: Unrecognized parameter: %60s", param);
-                acmessage_send(dev, stemp);
-                return ACERR_CONFIG_SYNTAX;
-            }else if(err == 2){
-                sprintf(stemp, "ACCONFIG: Failed to convert battery parameter:\n %60s %60s", param, value);
-                acmessage_send(dev, stemp);
-                return ACERR_CONFIG_SYNTAX;
+        }else if(streq(param, "loglevel")){
+            if(streq(value, "none"))
+                dev->loglevel = ACLOG_ESSENTIAL;
+            else if(streq(value, "low"))
+                dev->loglevel = ACLOG_LOW;
+            else if(streq(value, "medium"))
+                dev->loglevel = ACLOG_MEDIUM;
+            else if(streq(value, "high"))
+                dev->loglevel = ACLOG_HIGH;
+            else{
+                sprintf(stemp, "ACCONFIG: loglevel must be [none, low, high, debug].  Found: %32s", value);
+                acmessage(dev, stemp, ACLOG_ESSENTIAL);
             }
+        }else{
+            sprintf(stemp, "ACCONFIG: Unrecognized parameter: %60s", param);
+            acmessage(dev, stemp, ACLOG_ESSENTIAL);
+            fclose(fd);
+            return ACERR_CONFIG_SYNTAX;
         }
         
         // If the value is floating point
         if(ftarget){
             if(1 != sscanf(value, "%lf", ftarget)){
                 sprintf(stemp, "ACCONFIG: Non-numerical value for param: %60s", param);
-                acmessage_send(dev, stemp);
+                acmessage(dev, stemp, ACLOG_ESSENTIAL);
                 sprintf(stemp, "          value: %70s", value);
-                acmessage_send(dev, stemp);
+                acmessage(dev, stemp, ACLOG_ESSENTIAL);
+                fclose(fd);
                 return ACERR_CONFIG_SYNTAX;
             }
         // If the value is a string, move it.
         }else if(starget)
             strcpy(starget, value);
     }
+    fclose(fd);
     return done;
 }
 
@@ -370,7 +387,7 @@ acerror_t acopen(acdev_t *dev){
     acerror_t err;
     
     if(dev->handle){
-        acmessage_send(dev, "ACOPEN: The connection already appears to be open.");
+        acmessage(dev, "ACOPEN: The connection already appears to be open.", ACLOG_ESSENTIAL);
         return ACERR_DEV_ALREADY_OPEN;
     }
     
@@ -381,7 +398,7 @@ acerror_t acopen(acdev_t *dev){
     // Find a U3; it should be the only LJ device.
     dev->handle = LJUSB_OpenDevice(1, 0, U3_PRODUCT_ID);
     if(!dev->handle){
-        acmessage_send(dev, "ACOPEN: Open operation failed. Check device connection.");
+        acmessage(dev, "ACOPEN: Open operation failed. Check device connection.", ACLOG_ESSENTIAL);
         return ACERR_OPEN_FAILED;
     }
     
@@ -393,7 +410,7 @@ acerror_t acopen(acdev_t *dev){
     txbuffer[7] = 0x00;
     err = xmit(dev,1,38);
     if(err){
-        acmessage_send(dev, "ACINIT: Failed to read device version information.");
+        acmessage(dev, "ACINIT: Failed to read device version information.", ACLOG_MEDIUM);
         return err;
     }
     
@@ -411,7 +428,7 @@ acerror_t acopen(acdev_t *dev){
     txbuffer[7] = 0x00;   // Block 0
     err = xmit(dev,1,40);
     if(err){
-        acmessage_send(dev, "ACINIT: Failed while loading device analog input calibration.");
+        acmessage(dev, "ACINIT: Failed while loading device analog input calibration.", ACLOG_MEDIUM);
         return err;
     }
     dev->ain_slope = f64_to_double(&rxbuffer[8]);
@@ -425,7 +442,7 @@ acerror_t acopen(acdev_t *dev){
     txbuffer[7] = 0x02;   // Block 2
     err = xmit(dev,1,40);
     if(err){
-        acmessage_send(dev, "ACINIT: Failed while loading device analog input calibration.");
+        acmessage(dev, "ACINIT: Failed while loading device analog input calibration.", ACLOG_MEDIUM);
         return err;
     }
     dev->temp_slope = f64_to_double(&rxbuffer[8]);
@@ -447,59 +464,31 @@ acerror_t acopen(acdev_t *dev){
 acerror_t acinit(acdev_t *dev){
     acerror_t err;
     unsigned int ii;
+    char stemp[AC_STRLEN];
     
     // Test for an existing connection
     if(!dev->handle){
-        acmessage_send(dev, "ACINIT: The device connection does not appear to be open.");
+        acmessage(dev, "ACINIT: The device connection does not appear to be open.", ACLOG_ESSENTIAL);
         return ACERR_DEV_NOT_OPEN;
     }
+    
     
     
     // Use the FEEDBACK command to set the EIO pin directions and states
     // We'll turn everything on to test the LEDs and we'll turn the U3
     // LED off to signify the test.
     
-    /*  The original code used bit-wise settings
-    txbuffer[1] = 0xF8;
-    txbuffer[2] = 12;
-    txbuffer[3] = 0x00;
-    ii = 6;
-    txbuffer[ii++] = 0x00;  // Echo byte
-    txbuffer[ii++] = 0x0D; // Bit direction write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_ALARM + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0D; // Bit direction write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND0 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0D; // Bit direction write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND1 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0D; // Bit direction write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND2 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0D; // Bit direction write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND3 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit state write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_ALARM + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit state write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND0 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit state write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND1 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit direction write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND2 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x0B; // Bit direction write
-    txbuffer[ii++] = AC_BITSTATE_MASK | (ACPIN_IND3 + AC_EIO_OFFSET);
-    txbuffer[ii++] = 0x09; // Turn off the LED
-    txbuffer[ii++] = 0x00;
-    txbuffer[ii++] = 0x00;
-    */
     txbuffer[1] = 0xF8;
     txbuffer[2] = 9; // number of data words
-    txbuffer[3] = 0x00;
+    txbuffer[3] = 0x00; // Feedback CMD
     ii = 6;
     txbuffer[ii++] = 0x00;  // Echo byte
     txbuffer[ii++] = 29;    // Port direction write
     txbuffer[ii++] = 0x00;  // FIO write mask
-    txbuffer[ii++] = AC_EIODOUT_MASK;  // EIO write mask
+    txbuffer[ii++] = 0xFF;  // EIO write mask
     txbuffer[ii++] = 0x00;  // CIO write mask
     txbuffer[ii++] = 0x00;  // FIO direction mask
-    txbuffer[ii++] = AC_EIODOUT_MASK;  // EIO direction mask
+    txbuffer[ii++] = AC_EIODOUT_MASK;  // EIO direction bits
     txbuffer[ii++] = 0x00;  // CIO direction mask
     txbuffer[ii++] = 27;    // Port state write
     txbuffer[ii++] = 0x00;  // FIO write mask
@@ -523,26 +512,26 @@ acerror_t acinit(acdev_t *dev){
     */
     err = xmit(dev,1,10);
     if(err){
-        if(messages)
-            fprintf(messages, "ACINIT: Failed to initialize pin states.\n");
+        acmessage(dev, "ACINIT: Failed to initialize pin states.", ACLOG_ESSENTIAL);
         return err;
     }else if(rxbuffer[6]){
-        if(messages)
-            fprintf(messages, "ACINIT: Pin initialization failed in frame %d with error code: 0x%02x\n", rxbuffer[7], rxbuffer[6]);
+        sprintf(stemp, "ACINIT: Pin initialization failed in frame %d with error code: 0x%02x\n", rxbuffer[7], rxbuffer[6]);
+        acmessage(dev, stemp, ACLOG_ESSENTIAL);
         return ACERR_CONFIG_FAILED;
     }
+    
     
     // Use ConfigIO to set the EIOAnalog register
     txbuffer[1] = 0xF8; // Extended command
     txbuffer[2] = 0x03; // # Data words
-    txbuffer[3] = 0x0B; // ConfigIO
+    txbuffer[3] = 0x0B; // ConfigIO CMD
     txbuffer[6] = 0x0c; // Write mask FIO + EIO
     txbuffer[7] = 0x00; // Reserved
     txbuffer[10] = 0x0F;    // FIO Analog in
     txbuffer[11] = AC_EIOAIN_MASK;  // EIO Analog in
     err = xmit(dev,1,12);
     if(err){
-        acmessage_send(dev, "ACINIT: Failed while setting the FIO/EIO IO settings.");
+        acmessage(dev, "ACINIT: Failed while setting the FIO/EIO IO settings.", ACLOG_ESSENTIAL);
         return err;
     }
 
@@ -576,13 +565,13 @@ acerror_t acinit(acdev_t *dev){
     */
     err = xmit(dev,1,10);
     if(err){
-        acmessage_send(dev,"ACINIT: Failed to set pin states.\n");
+        acmessage(dev,"ACINIT: Failed to set pin states.\n", ACLOG_MEDIUM);
         return err;
     }else if(rxbuffer[6]){
         sprintf(stemp, "ACINIT: Failed to turn off LEDs in frame %d with error code: 0x%02x\n"
                 "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes\n",
                 rxbuffer[7], rxbuffer[6]);
-        acmessage_send(dev, stemp);
+        acmessage(dev, stemp, ACLOG_MEDIUM);
         return ACERR_CONFIG_FAILED;
     }
 
@@ -614,11 +603,19 @@ acerror_t acshow(acdev_t *dev){
         dev->bootloader_version,
         dev->hardware_version,
         dev->serial_number);
-    printf("AIN slope (v/bit): %.6e\nAIN offset (v): %.6e\n",
+    printf("AIN slope (V/bit): %.6e\nAIN offset (V): %.6e\n",
         dev->ain_slope,
         dev->ain_offset);
     printf("Temp slope (K/bit): %.6e\n",
         dev->temp_slope);
+    printf("Current slope (A/V): %.6e\nCurrent zero (V): %.6e\n",
+        dev->current_slope,
+        dev->current_zero);
+    printf("Voltage slope (V/V): %.6e\nVoltage zero (V): %.6e\n",
+        dev->voltage_slope,
+        dev->voltage_zero);
+    printf("Data interval (sec): %f\n", 
+        dev->tdata);
         
     return ACERR_NONE;
 }
@@ -629,7 +626,7 @@ acerror_t acset(acdev_t *dev, acpin_t pin, int value){
     uint8_t write;
     
     if(!dev->handle){
-        acmessage_send(dev, "ACSET: Device connection is not open.");
+        acmessage(dev, "ACSET: Device connection is not open.", ACLOG_MEDIUM);
         return ACERR_DEV_NOT_OPEN;
     }
     
@@ -650,13 +647,13 @@ acerror_t acset(acdev_t *dev, acpin_t pin, int value){
     
     err = xmit(dev,1,10);
     if(err){
-        acmessage_send(dev, "ACSET: Failed to set pin states.\n");
+        acmessage(dev, "ACSET: Failed to set pin states.\n", ACLOG_MEDIUM);
         return err;
     }else if(rxbuffer[6]){
         sprintf(stemp, "ACSET: Failed to set output with error code: 0x%02x\n"
                 "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes\n",
                 rxbuffer[6]);
-        acmessage_send(dev, stemp);
+        acmessage(dev, stemp, ACLOG_MEDIUM);
         return ACERR_CONFIG_FAILED;
     }
 
@@ -670,14 +667,14 @@ acerror_t acget(acdev_t *dev, acpin_t pin, double *value){
     uint8_t read;
     
     if(!dev->handle){
-        acmessage_send(dev, "ACGET: Device connection is not open.");
+        acmessage(dev, "ACGET: Device connection is not open.", ACLOG_MEDIUM);
         return ACERR_DEV_NOT_OPEN;
     }else if(   !(
             pin == ACPIN_CS ||
             pin == ACPIN_VS ||
             pin == ACPIN_T  )){
         sprintf(stemp, "ACGET: Illegal analog input pin number: %d", pin);
-        acmessage_send(dev, stemp);
+        acmessage(dev, stemp, ACLOG_MEDIUM);
         return ACERR_PARAM_ERROR;
     }
     
@@ -698,13 +695,13 @@ acerror_t acget(acdev_t *dev, acpin_t pin, double *value){
     err = xmit(dev,1,12);
     
     if(err){
-        acmessage_send(dev, "ACGET: Communication failed.");
+        acmessage(dev, "ACGET: Communication failed.", ACLOG_ESSENTIAL);
         return err;
     }else if(rxbuffer[6]){
         sprintf(stemp, "ACGET: Failed with LJ error code: 0x%02x\n"
                 "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes",
                 rxbuffer[6]);
-        acmessage_send(dev, stemp);
+        acmessage(dev, stemp, ACLOG_ESSENTIAL);
         return ACERR_CONFIG_FAILED;
     }
 
@@ -731,125 +728,155 @@ acerror_t acget(acdev_t *dev, acpin_t pin, double *value){
 }
 
 
-acerror_t acstream_start(acdev_t *dev){
+acerror_t acstream_start(acdev_t *dev, double sample_hz, uint8_t samples_per_packet){
     acerror_t err;
-    uint16_t scan_interval;
+    unsigned int sampleroll;     // the roll value for the sample clock
+    
     if(!dev->handle){
-        acmessage_send(dev, "ACGET: Device connection is not open.");
+        acmessage(dev, "ACSTREAM_START: Device connection is not open.", ACLOG_ESSENTIAL);
         return ACERR_DEV_NOT_OPEN;
+    }else if(samples_per_packet * AC_CHANNELS > 25){
+        acmessage(dev, "ACSTREAM_START: Failed to start. Too many samples per packet: %d\n", samples_per_packet);
+        return ACERR_AISTART_FAILED;
     }
-    
-    // Calculate the scan interval... This is the number of clock cycles
-    // between scans.  The clock setting is on slow: 
-    //  4MHz / 256 = 15.625kHz
-    scan_interval = (uint16_t) (dev->ts * SAMPLE_CLK_HZ);
-    // Update the time interval to reflect the actual value used
-    dev->ts = (double) scan_interval / SAMPLE_CLK_HZ;
-    
-    
+       
+    // Calculate the roll value for the sample clock
+    sampleroll = (unsigned int) (AC_AICLOCK_HZ / sample_hz) / 256;
+    dev->tsample = ((double) sampleroll * 256) / AC_AICLOCK_HZ;
+    dev->Nsample = samples_per_packet;
+   
+    printf("SAMPLEROLL: %d\n", sampleroll);
     // First, configure the stream
     // Use the STREAM CONFIG command
     txbuffer[1] = 0xF8;             // Long format
     txbuffer[2] = AC_CHANNELS + 3;
-    txbuffer[3] = 0x11;             // Command
+    txbuffer[3] = 0x11;             // StreamConfig CMD
     
     txbuffer[6] = AC_CHANNELS;      // Number of channels
-    txbuffer[7] = AC_PACKET;         // Samples / packet
+    txbuffer[7] = AC_CHANNELS * dev->Nsample;
     txbuffer[8] = 0x00;
-    txbuffer[9] = 0x04;             // 4MHz clock, divide by 256, 12.8 resolution
-    *(uint16_t*) &txbuffer[10] = scan_interval; 
+    txbuffer[9] = 0x0C;             // 48MHz clock, 12.8bit resolution
+    //txbuffer[9] = 0x04;             // 4MHz clock, 12.8bit resolution
+    txbuffer[10] = (uint8_t) (sampleroll & 0x00FF);
+    txbuffer[11] = (uint8_t) (sampleroll >> 8);// The roll value is 
+                                    // hard-coded based on a 4MHz clock
+                                    // a 600Hz sample rate
     
     // Set the channels
-    txbuffer[12] = ACPIN_CS + AC_EIO_OFFSET;
-    txbuffer[13] = 31;
+    txbuffer[12] = ACPIN_CS + AC_EIO_OFFSET;    // Current
+    txbuffer[13] = 31;                          // Single-ended
     
-    txbuffer[14] = ACPIN_VS + AC_EIO_OFFSET;
-    txbuffer[15] = 31;
+    txbuffer[14] = ACPIN_VS + AC_EIO_OFFSET;    // Voltage
+    txbuffer[15] = 31;                          // Single-ended
     
-    txbuffer[16] = 30;
-    txbuffer[17] = 31;
+    txbuffer[16] = 30;                          // Temperature
+    txbuffer[17] = 31;                          //
+    
+    printf("STREAM_CONFIG cmd:\n");
+    buffer_dump(txbuffer);
     
     err = xmit(dev,1,8);
     
+    printf("STREAM_CONFIG reply:\n");
+    buffer_dump(rxbuffer);
+    
     if(err){
-        acmessage_send(dev, "ACSTREAM_START: Communication failed while configuring the measurement.");
+        acmessage(dev, "ACSTREAM_START: Communication failed while configuring the measurement.", ACLOG_MEDIUM);
         return err;
     }else if(rxbuffer[6]){
         sprintf(stemp, "ACSTREAM_START: Configuration failed with LJ error code: 0x%02x\n"
                 "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes",
                 rxbuffer[6]);
-        acmessage_send(dev, stemp);
+        acmessage(dev, stemp, ACLOG_MEDIUM);
         return ACERR_CONFIG_FAILED;
     }
     
     txbuffer[1] = 0xA8;
     err = xmit(dev,1,4);
     
+    
+    printf("STREAM_START reply:\n");
+    buffer_dump(rxbuffer);
+    
     if(err){
-        acmessage_send(dev, "ACSTREAM_START: Communication failed while starting the measurement.");
+        acmessage(dev, "ACSTREAM_START: Communication failed while starting the measurement.", ACLOG_MEDIUM);
         return err;
     }else if(rxbuffer[2]){
         sprintf(stemp, "ACSTREAM_START: StreamStart failed with LJ error code: 0x%02x\n"
                 "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes",
                 rxbuffer[2]);
-        acmessage_send(dev, stemp);
+        acmessage(dev, stemp, ACLOG_MEDIUM);
         return ACERR_AISTART_FAILED;
     }
     
     dev->aistr_active = 1;
     
+    if(dev->loglevel >= ACLOG_HIGH)
+        acmessage(dev, "Stream started successfully", ACLOG_HIGH);
+    
     return ACERR_NONE;
 }
 
 acerror_t acstream_read(acdev_t *dev, double *data){
-    unsigned int result, sample, ii, jj;
+    unsigned int result, nbytes, sample, ii, jj;
     double x;
     
+    nbytes = 14 + 2 * AC_CHANNELS * dev->Nsample;   
     // Streaming does not require a transmit/response cycle; only read
+    //result = LJUSB_ReadTO(
+    /*result = LJUSB_StreamTO(
+            dev->handle, rxbuffer, STREAM_NBUF,
+            (unsigned int) AC_SAMPLETIME_SEC * 1200);     // Add 20% for a timeout interval (in ms)
+    */
     result = LJUSB_StreamTO(
-            dev->handle, rxbuffer, STREAM_NBUF, 
-            (unsigned int) dev->ts * 1200);     // Add 20% for a timeout interval (in ms)
+            dev->handle, rxbuffer, nbytes, 5000);
     
+    printf("STREAM_READ reply:\n");
     buffer_dump(rxbuffer);
     
-    if(result != STREAM_NBUF){
-        sprintf(stemp, "ACSTREAM_READ: Expected %d bytes, got %d.", STREAM_NBUF, result);
-        acmessage_send(dev, stemp);
+    if(result != nbytes){
+        sprintf(stemp, "ACSTREAM_READ: Expected %d bytes, got %d.", 64, result);
+        acmessage(dev, stemp, ACLOG_ESSENTIAL);
         return ACERR_RX_FAILURE;
     }else if(rxbuffer[11]){
         sprintf(stemp, "ACSTREAM_READ: StreamData failed with LJ error code: 0x%02x\n"
                 "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes",
                 rxbuffer[11]);
-        acmessage_send(dev, stemp);
+        acmessage(dev, stemp, ACLOG_ESSENTIAL);
         return ACERR_AIREAD_FAILED;
     }
-    
-    ii = 12;    // ii is the position in the rxbuffer
+
     jj = 0;     // jj is the position in the data array
-    // Apply calibrations
-    for(sample=0; sample<AC_SAMPLES_PER_READ; sample++){
-        // Current
-        x = (double) (*(uint16_t*) &rxbuffer[ii]);
+    // Apply voltage calibrations
+    for(ii=12; ii<12+nbytes;){
+        // // // Current Calibration // // //
+        // Convert from uint16 to double
+        x = (double) rxbuffer[ii++];
+        x += (double) rxbuffer[ii++] * 256;
+        // Calibrate to voltage
         x = dev->ain_slope * x + dev->ain_offset;
-        x = dev->current_slope * (x - dev->current_zero);
-        data[jj] = x;
-        ii += 2;
-        jj += 1;
-        // Voltage
-        x = (double) (*(uint16_t*) &rxbuffer[ii]);
+        // Apply sensor calibration
+        data[jj++] = dev->current_slope*(x - dev->current_zero);
+        // // // Voltage Calibration // // //
+        // Convert from uint16 to double
+        x = (double) rxbuffer[ii++];
+        x += (double) rxbuffer[ii++] * 256;
+        // Calibrate to voltage
         x = dev->ain_slope * x + dev->ain_offset;
-        x = dev->voltage_slope * (x - dev->voltage_zero);
-        data[jj] = x;
-        ii += 2;
-        jj += 1;
-        // Temperature
-        x = (double) (*(uint16_t*) &rxbuffer[ii]);
-        x = dev->temp_slope * x;
-        data[jj] = x;
-        ii += 2;
-        jj += 1;
+        // Apply sensor calibration
+        data[jj++] = dev->voltage_slope*(x - dev->voltage_zero);
+        
+        // // // Temperature Calibration // // //
+        // Convert from uint16 to double
+        x = (double) rxbuffer[ii++];
+        x += (double) rxbuffer[ii++] * 256;
+        // Apply sensor calibration
+        data[jj++] = dev->temp_slope*x;
     }
-    dev->aistr_backlog = rxbuffer[STREAM_NBUF-2];
+    dev->aistr_backlog = rxbuffer[nbytes-2];
+
+    if(dev->aistr_backlog)
+        acmessage(dev, "Stream read with backlog", ACLOG_HIGH);
     
     return ACERR_NONE;
 }
@@ -860,18 +887,51 @@ acerror_t acstream_stop(acdev_t *dev){
     txbuffer[1] = 0xB0;
     err = xmit(dev,1,4);
     
+    printf("STREAM_STOP reply:\n");
+    buffer_dump(rxbuffer);
+    
     if(err){
-        acmessage_send(dev, "ACSTREAM_STOP: Communication failed while stopping the measurement.");
+        acmessage(dev, "ACSTREAM_STOP: Communication failed while stopping the measurement.", ACLOG_MEDIUM);
         return err;
     }else if(rxbuffer[2]){
         sprintf(stemp, "ACSTREAM_STOP: StreamStop failed with LJ error code: 0x%02x\n"
                 "  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes",
                 rxbuffer[2]);
-        acmessage_send(dev, stemp);
+        acmessage(dev, stemp, ACLOG_MEDIUM);
         return ACERR_AISTOP_FAILED;
+    }else{
+        acmessage(dev, "ACSTREAM_STOP: Stream stopped successfully\n", ACLOG_HIGH);
     }
     
     dev->aistr_active = 0;
     
+    return ACERR_NONE;
+}
+
+/* ACCAL - Get Current, Voltage, and Temperature
+ * 
+ * Accepts the data array from the AC_STREAM_READ() function.  
+ * Calculates mean voltage, current, and temperature over the period of
+ * data collection (should be one line cycle).
+ * 
+ * ACCAL does not raise an error.
+ */
+acerror_t acmean(acdev_t *dev, double* data, double* I, double* V, double* T){
+    unsigned int sample_index, index;
+    
+    // Accumulate the mean signals
+    *I = 0.;
+    *V = 0.;
+    *T = 0.;
+    for(index=0; index<AC_CHANNELS*dev->Nsample;){
+        *I += data[index++];
+        *V += data[index++];
+        *T += data[index++];
+    }
+    *I /= dev->Nsample;
+    *V /= dev->Nsample;
+    *T /= dev->Nsample;
+    
+    // The voltage calibration is performed in the acstream_read() function.   
     return ACERR_NONE;
 }

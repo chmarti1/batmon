@@ -1,0 +1,144 @@
+[Sun 2022-09-11 14:03:40] ACSTREAM_STOP: StreamStop failed with LJ error code: 0x34
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[Sun 2022-09-11 14:03:40] Stream started successfully
+[Sun 2022-09-11 14:04:46] ACSTREAM_STOP: StreamStop failed with LJ error code: 0x34
+  https://labjack.com/support/datasheets/u3/low-level-function-reference/errorcodes
+[Sun 2022-09-11 14:04:46] Stream started successfully
+[Sun 2022-09-11 14:04:46] ACSTREAM_STOP: Stream stopped successfully
+
+[Sun 2022-09-11 14:49:19] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 14:49:19] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:01:49] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:01:49] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:01:53] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:01:53] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:01:55] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:01:55] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:02:10] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:02:10] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:02:15] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:02:15] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:02:23] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:02:23] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:02:53] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:02:53] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:02:58] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:02:58] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:03:06] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:03:06] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:03:10] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:03:10] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:03:19] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:03:19] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:03:28] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:03:28] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:03:37] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:03:37] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:03:47] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:03:47] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:04:10] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:04:10] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:04:17] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:04:17] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:04:23] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:04:23] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:04:28] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:04:28] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:04:36] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:04:36] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:04:39] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:04:39] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:03] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:03] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:09] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:09] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:28] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:28] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:31] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:31] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:36] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:36] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:39] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:39] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:45] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:45] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:48] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:48] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:50] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:50] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:55] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:55] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:59] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:05:59] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:06:03] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:06:03] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:06:07] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+
+[Sun 2022-09-11 16:06:07] ACCONFIG: loglevel must be [none, low, high, debug].  Found:                              low
+

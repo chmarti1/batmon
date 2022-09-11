@@ -12,12 +12,10 @@
 #include <labjackusb.h>
 #include <stdio.h>
 #include <stdint.h>
-#include "chargemodel.h"
 
 // Analog stream prameters
-#define AC_SAMPLES_PER_PACKET   5
 #define AC_CHANNELS             3
-#define AC_PACKET               AC_SAMPLES_PER_PACKET * AC_CHANNELS
+#define AC_AICLOCK_HZ           48e6
 #define AC_BITSTATE_MASK        0x80        // Pin 7 is the bit state/direction bit in the bit direction/state commands
 #define AC_EIO_OFFSET           8           // The EIO pins are 8-15, so there is an offset of 8 for the pin numbers.
 #define AC_STRLEN               256         // The longest string length allowed
@@ -76,6 +74,14 @@ typedef enum _acerror_t {
     
 } acerror_t;
 
+
+typedef enum _acloglevel_t{
+    ACLOG_ESSENTIAL = -1,
+    ACLOG_LOW = 0,
+    ACLOG_MEDIUM = 1,
+    ACLOG_HIGH = 2,
+} acloglevel_t;
+
 // These are masks constructed from the relevant EIO pin numbers
 // --> EIO Analog input mask 8-bits with 1 for AIN pins
 #define AC_EIOAIN_MASK  (1<<ACPIN_CS | 1<<ACPIN_VS) // These are the analog
@@ -93,8 +99,9 @@ typedef struct _acdev_t {
     char logfile[AC_STRLEN];
     char statfile[AC_STRLEN];
     char datafile[AC_STRLEN];
-    
-    double ts;  // Sample period in seconds
+
+    // Log level
+    acloglevel_t loglevel;
 
     // Descriptive
     float firmware_version;
@@ -116,9 +123,10 @@ typedef struct _acdev_t {
     
     // data record interval
     double tdata;
-    
-    // Chargemodel struct
-    cmbat_t battery;
+    // AI sample interval
+    double tsample;
+    // AI sample count
+    uint8_t Nsample;
     
     // Stream status parameters
     unsigned int aistr_backlog;
@@ -126,40 +134,22 @@ typedef struct _acdev_t {
 } acdev_t;
 
 
-/* ACMESSAGE_SET - Configure a file stream for error messages
- *  Internal error messages are written to two file streams when they
- * occur: to the log file specified in configuration and to a message
- * stream that can be specified by acmessage_set().  By default, it is
- * inactive, but many applications will want to set it to stderr.
- * 
- * Unlike the log file, which is device-specific, the message stream is
- * a global setting for autocom.  All messages will go to the same 
- * stream, while each device receives its own log file.
- * 
- * See acmessage_send() for more information.
- */
-acerror_t acmessage_set(FILE* target);
-
 /* ACMESSAGE_SEND - Log and send a message
- *  acmessage_send pushes text to two file streams: the log file 
- * specified in configuration and the messages stream specified by 
- * acmessage_set().  Both are inactive by default, so in those cases,
- * acmessage_send() will do nothing.  The messages stream will usually
- * be set to stderr or stdout, and the log stream will usually be 
- * directed to a log file in /var/log somewhere.
+ *  acmessage_send pushes text to a log location.  If no log file has 
+ * been configured for the device, then stdout is used.  If the 
+ * dev->logfile path is defined, it attempts to open the file, append to
+ * it, and close the file.  If that process fails, a message is sent to 
+ * stderr and the original message is sent to stdout.
  * 
- * Messages sent to the messages stream and the log file will have a 
- * newline appended, and messages sent to the log file will have a 
- * timestamp prepended in brackets.  The timestamp uses C calendar time
- * (seconds since the epoch).  The intent is that messages will be read
- * as they are generated, but logs will be reviewed after-the-fact, so
- * users will be able to reconstruct when and how failures happened.
+ * Messages will have an integer "[TIMESTAMP]" prepended (seconds since 
+ * the epoch), and a newline appended.  
  * 
- * acmessage_send() is used internally, but it is also exposed to the
- * application, so high-level messages may be mixed with internal ones
- * for more context for the error.
+ * The message's log level is specified by the "level" enum.  Messages
+ * that are higher than the devices configured dev->loglevel value will
+ * be ignored.  Messages with lower values will be sent.  Negative 
+ * values will always be sent.
  */
-acerror_t acmessage_send(acdev_t *dev, char *text);
+acerror_t acmessage(acdev_t *dev, char *text, acloglevel_t level);
 
 /* ACCONFIG - Load a device configuration file
  * 
@@ -246,10 +236,17 @@ acerror_t acget(acdev_t *dev, acpin_t pin, double *value);
 
 /* ACSTREAM_START - Starts continuous analog measurements
  */
-acerror_t acstream_start(acdev_t *dev);
+acerror_t acstream_start(acdev_t *dev, double sample_hz, uint8_t samples_per_packet);
 
 acerror_t acstream_read(acdev_t *dev, double *data);
 
 acerror_t acstream_stop(acdev_t *dev);
 
+/* ACCAL - Get Current, Voltage, and Temperature
+ * 
+ * Accepts the data array from the AC_STREAM_READ() function.  
+ * Calculates mean voltage, current, and temperature over the period of
+ * data collection (should be one line cycle).
+ */
+acerror_t acmean(acdev_t* dev, double* data, double* I, double* V, double* T);
 #endif

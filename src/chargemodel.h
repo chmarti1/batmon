@@ -42,7 +42,8 @@
  *                       \       T      T * T   /
  * 
  * The coefficient, Vinf, is the open-circuit charge or discharge 
- * voltage extrapolated to infinite temperature
+ * voltage extrapolated to infinite temperature.  It is calculated from
+ * VFULL and VDISCH, which are the full-charge voltages at Tref.
  * 
  */
  
@@ -51,35 +52,24 @@
 
 #define CMHIST 2
 
-// The CMBAT_T struct tracks the battery properties
-// Parameters that are calculated from raw configuration parameters
-// are preceeded with an underscore.
-typedef struct _cmbat_t {
-    // Resistance model
-    double R1;          // Initial terminal resistance at reference temperature
-    double R2;          // Rise in terminal resistance at reference temperature
-    // Time parameters
-    double tc;      // Time constant for resistance relaxation
-    double ts;      // Sample interval
-    // Temperature parameters
-    double Tref_K;      // reference temperature
-    // Voltage parameters
-    //  V = v0 * (1 + c1/T + (c2/T)*(c2/T))
-    double Vfull;       // OCV at full charge at Tref
-    double Vfull_c1;    //   temperature coefficient 1 (Kelvin)
-    double Vfull_c2;    //   temperature coefficient 2 (Kelvin)
-    double Vdisch;      // OCV at fully discharged at Tref
-    double Vdisch_c1;   //   temperature coefficient 1 (Kelvin)
-    double Vdisch_c2;   //   temperature coefficient 2 (Kelvin)
-    
-    // Dynamic model histories
-    double _I[CMHIST];  // Current history array
-    double _VL[CMHIST]; // Voltage loss history array
-    double _VT[CMHIST]; // Terminal voltage history
 
-    unsigned long int uptime;
-    
-} cmbat_t;
+// The CMTF_T struct models a dynamic model.  This is used for coulomb 
+// counter and the dynamic terminal model.  It is a discrete-time 
+// transfer function model.
+typedef struct _cmtf_t {
+    double a[CMHIST];       // Model output coefficients
+    double b[CMHIST];       // Model input coefficients
+    double x[CMHIST];       // Model output history
+    double u[CMHIST];       // Model input history
+} cmtf_t;
+
+typedef enum _cmcharge_t {
+    CM_CHARGE_UNKNOWN = 'U',
+    CM_CHARGE_EMPTY='E',
+    CM_CHARGE_NONFULL='N', 
+    CM_CHARGE_FULL='F'
+} cmcharge_t;
+
 
 typedef struct _cmstat_t {
     double _sumx2;      // sum of the square of measurements
@@ -95,48 +85,151 @@ typedef struct _cmstat_t {
     double stdev;
 } cmstat_t;
 
-// Assign safe initial conditions to the battery parameters
-int cminit(cmbat_t *bat);
+// The CMBAT_T struct tracks the battery properties
+// Parameters that are calculated from raw configuration parameters
+// are preceeded with an underscore.
+typedef struct _cmbat_t {
+    // Resistance model
+    double R1;          // Initial terminal resistance at reference temperature
+    double R2;          // Rise in terminal resistance at reference temperature
+    // Time parameters
+    double tc;      // Time constant for resistance relaxation
+    double ts;      // Sample interval
+    // Temperature parameters
+    double Tref;        // reference temperature in (Kelvin)
+    // Voltage parameters
+    //  V = v0 * (1 + c1/T + (c2/T)*(c2/T))
+    double Vfull;       // OCV at full charge at Tref
+    double Vfull_c1;    //   temperature coefficient 1 (Kelvin)
+    double Vfull_c2;    //   temperature coefficient 2 (Kelvin)
+    double Vdisch;      // OCV at fully discharged at Tref
+    double Vdisch_c1;   //   temperature coefficient 1 (Kelvin)
+    double Vdisch_c2;   //   temperature coefficient 2 (Kelvin)
+    
+    double Vt;          // Last terminal voltage measured
+    double I;           // Last measured current
+    double T;           // Last measured temperature
+    double Voc;         // last open-circuit voltage calculation
+    double Q;           // last coulomb count
+    double soc;         // Depth of charge estimate
+    
+    cmcharge_t chargestate;
+    
+    // Dynamic models
+    cmtf_t _vttf;
+    cmtf_t _qtf;
+    // Signal statistics
+    cmstat_t istat;
+    cmstat_t vstat;
+    cmstat_t tstat;
 
-/* CMWRITE
- * Provides a parametric interface for reading in parameter-value pairs
- * from a configuration file.  Return values are: 
- *  0   on success
- *  1   the parameter was not recognized
- *  2   there was a problem parsing the value
+    unsigned long int uptime;
+    
+} cmbat_t;
+
+
+
+/* CMCONFIG - init and load params from a configuration file
+ * 
+ * cmconfig(cmbat_t *bat, char *filename, double ts);
+ *      The TS argument specifies the period between current, voltage,
+ *      and temperature measurements in seconds.  It is specified by the
+ *      application and NOT by the configuration file.
+ * 
+ * Parameters are expected in whitespace separated parameter-value pairs
+ * All parameters are case-insensitive strings, and all values are 
+ * interpreted as floating point numbers.  Below, parameters are listed
+ * along with their default value and their units.
+ * 
+ *      TREF        (298.15, K)
+ * The reference temperature in Kelvin.  This is the temperature at 
+ * which all parameters (like R1, R2, etc...) are specified.
+ * 
+ *      R1          (0.0, ohms)
+ * The initial or small-current terminal resistance at Tref in ohms.
+ * See the description above for the equivalent circuit model.
+ *
+ *      R1_TEMP     (0.0, ohms)
+ * The temperature coefficient for the R1 terminal resistance in ohms/K.
+ * When non-zero, this is used to linearly adjust the terminal 
+ * resistance with changes in temperature.
+ * 
+ *      R2          (0.0, ohms)
+ * The steady-state rise in terminal resistance at Tref in ohms.  See
+ * the description above for the equivalent circuit model.
+ * 
+ *      R2_TEMP     (0.0, ohms)
+ * The temperature coefficient for R2 in ohms/K.  When non-zero this is
+ * used to linearly adjust R2 for changes in temperature.
+ * 
+ *      TC          (1, sec)
+ * The battery's time constant in seconds.  When discharge (or charge)
+ * begins, the C*R2 time constant determines how long it takes for the
+ * terminal voltage to settle into its steady-state value.  Rather than
+ * asking the user to estimate capacitance, TC is a parameter that is 
+ * easier to observe experimentally.
+ * 
+ *      VFULL       (12.9, V)
+ * The open-circuit voltage of the battery when it is fully charged at
+ * temperature, Tref.  See the model above for how R1, R2, and TC are
+ * used to relate terminal and open-circuit voltage.  See also VDISCH.
+ * 
+ *      VFULL_C1, VFULL_C2     (0.0, K)
+ * First and second temperature coefficients for the fully charged open-
+ * circuit voltage.  Vfull(T) = Vinf( 1 + C1/T + C2*C2/T/T )  Vinf is 
+ * calculated such that Vfull(Tref) matches the value specified by VFULL.
+ * See also VDISCH_C1 and VDISCH_C2.
+ * 
+ *      VDISCH      (11.55, V)
+ * The open-circuit voltage of the battery when it is fully discharged
+ * at temperature, Tref.  
+ * 
+ *      VDISCH_C1, VDISCH_C2     (0.0, K)
+ * First and second temperature coefficients for the fully discharged 
+ * open-circuit voltage.  Vfull(T) = Vinf( 1 + C1/T + C2*C2/T/T )  Vinf
+ * is calculated such that Vfull(Tref) matches the value specified by 
+ * VDISCH.
  */
-int cmwrite(cmbat_t *bat, char *param, char *value);
+int cmconfig(cmbat_t *bat, char *filename, double ts);
 
-double cmstep(cmbat_t *bat, double I, double V);
-
-/* CMSTAT_RESET
- * The CMSTAT_T struct holds statistics on a recurring measurement 
- * between calls to the CMSTAT_RESET function.  A "reset" clears members
- * that accumulate sums for the mean and standard deviation calculations
- * as well as members for tracking maximum and minimum values.
+/* CMVFULL, CMVDISCH - calculate fully (dis)charged OCV in volts.
+ *  Returns the fully (dis)charged open-circuit voltage in volts.
+ *  BAT - the battery model struct
  * 
- * A reset does NOT affect the "reported" values in members:
- *  max, min, mean, rms, and stdev
- * 
- * Calling CMSTAT_RESET on a stat effectively concludes the accumulation
- * of data and starts a new interval.  See CMSTAT_DATUM.
+ * Uses the last measured temperature registered with CMSTEP() to 
+ * compensate for temperature.
  */
-void cmstat_reset(cmstat_t *stat);
+double cmvfull(cmbat_t *bat);
+double cmvdisch(cmbat_t *bat);
 
-/* CMSTAT_DATUM
- * Enter a new datum into the statistics accumulation struct. There are
- * "private" members that track measurement statistics,
- *      _sumx, _sumx2, _max, _min, _N
- * which should never be accessed directly.
+/* CMR1, CMR2 - calculate the terminal resistances in ohms
+ *  Returns R1 and R2 in ohms.
+ *  BAT - the battery model struct
  * 
- * Each call to CMSTAT_DATUM updates the "public" members:
- *      max, min, mean, rms, stdev
- * 
- * These values will be uninitialized even after a call to CMSTAT_RESET,
- * but they will hold valid values after the first call to CMSTAT_DATUM.
- * After a second call to CMSTAT_RESET, they will retain their values 
- * until the next call to CMSTAT_DATUM.
+ * Uses the last measured temperature registered with CMSTEP() to 
+ * compensate for temperature.
  */
-void cmstat_datum(cmstat_t *stat, double x);
+double cmr1(cmbat_t *bat);
+double cmr2(cmbat_t *bat);
+
+/* CMSTEP - updates all battery model parameters with a new measurement
+ * 
+ * Accepts the terminal current and the terminal voltage as inputs. 
+ * Returns 1 if the charge state has changed since the last update. 
+ * Otherwise, returns 0.
+ * 
+ * The coloumb count in the bat.Q member is reset on the next call after
+ * a change of charge state, so its value should be read immediately if
+ * it is needed.
+ */
+int cmstep(cmbat_t *bat, double I, double V, double T);
+
+/* CMRESET - resets the istat, vstat, and tstat statistics structs
+ * 
+ * This should be called to start a new accumulation interval.  It does
+ * not clear the public members in the structs until the next call to 
+ * cmstep().
+ */
+void cmreset(cmbat_t *bat);
 
 #endif

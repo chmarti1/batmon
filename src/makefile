@@ -10,7 +10,7 @@ CONF=/etc
 BMCMD=$(BIN)/bmcmd
 BATMON=$(BIN)/batmon
 BMCONF=$(CONF)/batmon.conf
-BMSERVICE=($SYSTEMD)/batmon.service
+BMSERVICE=$(SYSTEMD)/batmon.service
 USER=batmon
 
 # Build some dependency lists
@@ -18,20 +18,16 @@ LINK=-lm -llabjackusb
 BINARIES=bmcmd.bin batmon.bin
 
 
-bmcmd.bin: bmcmd.c autocom.o chargemodel.o
-	@echo "==> Combiling the bmcmd binary"
-	gcc -Wall autocom.o chargemodel.o bmcmd.c $(LINK) -o bmcmd.bin
-
-batmon.bin: batmon.c autocom.o chargemodel.o
-	@echo "==> Combiling the batmon binary"
-	gcc -Wall autocom.o chargemodel.o batmon.c $(LINK) -o batmon.bin
+bmsvc.bin: bmsvc.c chargemodel.o autocom.o
+	@echo "==> Compiling the batery monitor service binary"
+	gcc -Wall -o bmsvc.bin autocom.o chargemodel.o bmsvc.c -lm -llabjackusb
 
 chargemodel.o: chargemodel.c chargemodel.h
-	@echo "==> Combiling the chargemodel object"
+	@echo "==> Compiling the chargemodel object"
 	gcc -Wall -c chargemodel.c -o chargemodel.o
 
 autocom.o: autocom.c autocom.h
-	@echo "==> Combiling the autocom binary"
+	@echo "==> Compiling the autocom binary"
 	gcc -Wall -c autocom.c -o autocom.o
 
 clean:
