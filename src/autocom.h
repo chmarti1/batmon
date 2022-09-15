@@ -18,7 +18,7 @@
 #define AC_AICLOCK_HZ           48e6
 #define AC_BITSTATE_MASK        0x80        // Pin 7 is the bit state/direction bit in the bit direction/state commands
 #define AC_EIO_OFFSET           8           // The EIO pins are 8-15, so there is an offset of 8 for the pin numbers.
-#define AC_STRLEN               256         // The longest string length allowed
+#define AC_STRLEN               128         // The longest string length allowed
 
 typedef enum _acchannel_t {
     ACCHAN_CURRENT = 0,

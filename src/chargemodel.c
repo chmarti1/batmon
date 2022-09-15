@@ -142,18 +142,9 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
     bat->T = bat->Tref; // Last measured temperature
     bat->Voc = bat->Vfull;// last open-circuit voltage calculation
     bat->Q = 0.;        // Coloumb count
-    bat->soc = 1.;         // Depth of charge estimate
+    bat->soc = 1.;         // State of charge estimate
     
     bat->chargestate = CM_CHARGE_UNKNOWN;
-    
-    // Dynamic models
-    tf_init(&bat->_vttf);
-    tf_init(&bat->_qtf);
-    // Signal statistics
-    stat_reset(&bat->istat);
-    stat_reset(&bat->vstat);
-    stat_reset(&bat->tstat);
-
     bat->uptime = 0;
 
     // Open the configuration file
@@ -255,7 +246,25 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
     }else if(bat->tc < bat->ts){
         fprintf(stderr, "CMCONFIG: WARNING * The sample interval is longer than the battery time constant.\n");
         return -1;
+    }else if(bat->ts <= 0.){
+        fprintf(stderr, "CMCONFIG: The application is using a non-positive sample interval!?\n");
+        return -1;
     }
+    
+    // Initialize the histories
+    tf_init(&bat->_vttf);
+    tf_init(&bat->_qtf);
+    // The terminal voltage TF will be set when cmstep() is called.
+    // Go ahead and set the charge integrator - use Tustin/trapezoidal
+    bat->_qtf.b[1] = 0.5 * bat->ts;
+    bat->_qtf.b[0] = 0.5 * bat->ts;
+    bat->_qtf.a[1] = 1;
+    bat->_qtf.a[0] = -1;
+    
+    // Initialize the signal statistics
+    stat_reset(&bat->istat);
+    stat_reset(&bat->vstat);
+    stat_reset(&bat->tstat);
     return 0;
 }
 
@@ -317,62 +326,67 @@ double cmr2(cmbat_t *bat){
     return value;
 }
 
+int cmupdate(cmbat_t *bat){
+    double T;
+    // Use the mean temperature
+    T = bat->tstat.mean;
+    // Update the Vfull values
+    bat->Vfull_T = bat->Vfull;
+    if(bat->Vfull_c1){
+        bat->Vfull_T += bat->Vfull_c1 * (1./T - 1./bat->Tref);
+    }
+    if(bat->Vfull_c2){
+        bat->Vfull_T += bat->Vfull_c2 * bat->Vfull_c2 * (1./T/T - 1./bat->Tref/bat->Tref);
+    }
+    // Update the Vdisch values
+    bat->Vdisch_T = bat->Vdisch;
+    if(bat->Vdisch_c1){
+        bat->Vdisch_T += bat->Vdisch_c1 * (1./T - 1./bat->Tref);
+    }
+    if(bat->Vdisch_c2){
+        bat->Vdisch_T += bat->Vdisch_c2 * bat->Vdisch_c2 * (1./T/T - 1./bat->Tref/bat->Tref);
+    }
+    // Update the charge state
+    
+}
+
 
 int cmstep(cmbat_t *bat, double I, double V, double T){
-    double Vfull, Vdisch;
+    double Vfull, Vdisch, Rinf, R0, tratio;
     cmcharge_t last;
     
     bat->uptime ++;
+
+    // Update the direct measurements
+    bat->Vt = V;
+    bat->I = I;
+    bat->T = T;
 
     // Update the signal statistics
     stat_datum(&bat->istat, I);
     stat_datum(&bat->vstat, V);
     stat_datum(&bat->tstat, T);
 
+    // Update the charge integral
+    bat->Q = tf_eval(&bat->_qtf, I);
+
+    // Calculate current terminal resistance values (depends on T)
+    R0 = cmr1(bat);
+    Rinf = R0 + cmr2(bat);
+    // Ratio of the time constant to the sample interval
+    tratio = 2*bat->tc/bat->ts;
+    // Update the TF coefficients
+    bat->_vttf.b[1] = Rinf + R0*tratio;
+    bat->_vttf.b[0] = Rinf - R0*tratio;
+    bat->_vttf.a[1] = 1+tratio;
+    bat->_vttf.a[0] = 1-tratio;
+
     // Update the open circuit voltage calculation
     bat->Voc = V + tf_eval(&bat->_vttf, I);
-    bat->Vt = V;
-    bat->I = I;
-    
-    // Calculate voltage limits at the current temperature
-    Vfull = 1 + bat->Vfull_c1*(1/T - 1/bat->Tref);
-    Vfull += bat->Vfull_c2*bat->Vfull_c2*(1/(T*T) - 1/(bat->Tref*bat->Tref));
-    Vfull *= bat->Vfull;
-    
-    Vdisch = 1 + bat->Vdisch_c1*(1/T - 1/bat->Tref);
-    Vdisch += bat->Vdisch_c2*bat->Vdisch_c2*(1/(T*T) - 1/(bat->Tref*bat->Tref));
-    Vdisch *= bat->Vdisch;
-    
-    // If the charge state has changed, then null out the coloumb counter
-    last = bat->chargestate;
-    // If Vfull <= Vdischarge, then there is a serious problem!
-    if(Vfull <= Vdisch){
-        bat->chargestate = CM_CHARGE_UNKNOWN;
-        bat->soc = 0.;
-    }else if(bat->Voc >= Vfull){
-        bat->chargestate = CM_CHARGE_FULL;
-        bat->soc = 1.;
-    }else if(bat->Voc > Vdisch){
-        bat->chargestate = CM_CHARGE_NONFULL;
-        bat->soc = (bat->Voc - Vdisch)/(Vfull - Vdisch);
-    }else{
-        bat->chargestate = CM_CHARGE_EMPTY;
-        bat->soc = 0.;
-    }
-    
-    // If the charge state has changed, null out the integrator
-    // Do not reset Q yet.  Let the application read it first.
-    if(bat->chargestate != last){
-        bat->_qtf.u[0] = 0.;
-        bat->_qtf.u[1] = 0.;
-        bat->_qtf.x[0] = 0.;
-        bat->_qtf.x[1] = 0.;
-        
-        return 1;
-    }else{
-        bat->Q = tf_eval(&bat->_qtf, I);
-    }
 
+    // Check for a state change that might prompt the application to
+    // call for an update.
+    
     return 0;
 }
 

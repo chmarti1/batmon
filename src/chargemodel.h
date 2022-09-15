@@ -63,10 +63,30 @@ typedef struct _cmtf_t {
     double u[CMHIST];       // Model input history
 } cmtf_t;
 
+typedef enum _cmevent_t {
+    CM_EVENT_NONE = 0x00;   // Nothing to report
+    // Current-based events
+    CM_EVENT_IUP = 0x11;    // Current changed from negative to positive
+    CM_EVENT_IDOWN = 0x12;  // Current changed from positive to negative
+    CM_EVENT_DIDTUP = 0x13; // There was a rapid increase in current
+    CM_EVENT_DIDTDOWN = 0x14;// .. rapid decrease in current
+    CM_EVENT_IHIGH = 0x15;  // Current rose above Ihigh
+    CM_EVENT_ILOW = 0x16;
+    // Voltage-based events
+    CM_EVENT_DVDTUP = 0x23; // Rapid positive change in voltage
+    CM_EVENT_DVDTDOWN = 0x24;// Rapid negative change in voltage
+    CM_EVENT_VHIGH = 0x25;  // The terminal voltage rose above Vhigh
+    CM_EVENT_VLOW = 0x26;   // The terminal voltage dropped below Vlow
+    // Temperature-based events
+    CM_EVENT_THIGH = 0x35;  // The temperature rose above Thigh
+    CM_EVENT_TLOW = 0x36;   // The temperature fell below Tlow
+} cmevent_t;
+
 typedef enum _cmcharge_t {
     CM_CHARGE_UNKNOWN = 'U',
     CM_CHARGE_EMPTY='E',
-    CM_CHARGE_NONFULL='N', 
+    CM_CHARGE_CHARGING='C', 
+    CM_CHARGE_DISCHARGING='D',
     CM_CHARGE_FULL='F'
 } cmcharge_t;
 
@@ -89,6 +109,7 @@ typedef struct _cmstat_t {
 // Parameters that are calculated from raw configuration parameters
 // are preceeded with an underscore.
 typedef struct _cmbat_t {
+    // ** Statically configured model parameters **
     // Resistance model
     double R1;          // Initial terminal resistance at reference temperature
     double R2;          // Rise in terminal resistance at reference temperature
@@ -106,24 +127,28 @@ typedef struct _cmbat_t {
     double Vdisch_c1;   //   temperature coefficient 1 (Kelvin)
     double Vdisch_c2;   //   temperature coefficient 2 (Kelvin)
     
+    // ** parameters updated by CMSTEP() **
+    unsigned long int uptime;   // Number of CMSTEP() calls
     double Vt;          // Last terminal voltage measured
     double I;           // Last measured current
     double T;           // Last measured temperature
     double Voc;         // last open-circuit voltage calculation
     double Q;           // last coulomb count
-    double soc;         // Depth of charge estimate
+    // Signal statistics
+    cmstat_t istat;     // Current
+    cmstat_t vstat;     // Terminal voltage
+    cmstat_t tstat;     // Temperature
     
-    cmcharge_t chargestate;
+    // ** parameters updated by CMUPDATE() **
+    double soc;         // State of charge estimate
+    double Vfull_T;     // OCV at full charge at T (calculated)
+    double Vdisch_T;    // OCV at fully discharged at T (calculated)
+    cmcharge_t chargestate; // ENUM establishing the current operating mode
     
+    // ** Quasi-private state structs **
     // Dynamic models
     cmtf_t _vttf;
     cmtf_t _qtf;
-    // Signal statistics
-    cmstat_t istat;
-    cmstat_t vstat;
-    cmstat_t tstat;
-
-    unsigned long int uptime;
     
 } cmbat_t;
 
@@ -211,6 +236,19 @@ double cmvdisch(cmbat_t *bat);
  */
 double cmr1(cmbat_t *bat);
 double cmr2(cmbat_t *bat);
+
+/* CMSOC - state of charge estimate
+ *  Uses cmvfull() and cmvdisch() to estimate fully charged and 
+ * discharged voltages.  The open-circuit voltage estimate is then used
+ * to interpolate,
+ * 
+ *  soc = (Voc - Vdisch) / (Vfull - Vdisch)
+ * 
+ * Nominally, the soc parameter should be clamped to be between 0 and 1,
+ * but it is diagnostically important to record conditions when the 
+ * battery is above full or below fully discharged.  
+ */
+double cmsoc(cmbat_t *bat);
 
 /* CMSTEP - updates all battery model parameters with a new measurement
  * 
