@@ -63,12 +63,14 @@ int main(int argc, char* argv[]){
     }
     err = cmconfig(&bat, BATCONFIG, 1./60.);
     if(err){
-        acmessage(&dev, "BMSVC: Failed to parse  - aborting.", ACLOG_ESSENTIAL);
+        acmessage(&dev, "BMSVC: Failed to parse " BATCONFIG " - aborting.", ACLOG_ESSENTIAL);
         return -1;
     }
     
     // Calculate the number of steps between data records
-    data_every = (unsigned int) (dev->tdata * 60);
+    data_every = (unsigned int) (dev.tdata * 60);
+    
+    acmessage(&dev, "Starting service.", ACLOG_LOW);
     
     /**************************/
     /* OPEN DEVICE CONNECTION */
@@ -129,9 +131,9 @@ int main(int argc, char* argv[]){
         // If the stream failed
         // use the data from the last valid measurement
         if(bad_f){
-            I = bat->I;
-            V = bat->Vt;
-            T = bat->T;
+            I = bat.I;
+            V = bat.Vt;
+            T = bat.T;
         // Otherwise, average the latest measurements
         }else{
             I = 0.5*(I1+I2);
@@ -145,10 +147,13 @@ int main(int argc, char* argv[]){
         // Track the number of samples since the last data log
         ii--;
         if(ii==0){
+            cmupdate(&bat);
             acdata(&dev, &bat);
             ii = data_every;
         }
     }
+
+    acmessage(&dev, "Halting service.", ACLOG_LOW);
 
     // Halt the data stream
     err = acstream_stop(&dev);

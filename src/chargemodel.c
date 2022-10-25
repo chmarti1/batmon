@@ -114,7 +114,7 @@ void strlower(char *target){
 
 int cmconfig(cmbat_t *bat, char *filename, double ts){
     int result, count, err;
-    char param[CM_STRLEN];
+    char param[CM_STRLEN], svalue[CM_STRLEN];
     double value, vmax, vmin;
     double *ftarget;
     FILE *fd = NULL;
@@ -144,6 +144,7 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
     bat->Voc = bat->Vfull;// last open-circuit voltage calculation
     bat->Q = 0.;        // Coloumb count
     bat->soc = 1.;         // State of charge estimate
+    bat->chargestate = CM_CHARGE_UNKNOWN;
     
     bat->uptime = 0;
 
@@ -155,7 +156,7 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
     }
     
     for(count=1; !feof(fd); count++){
-        result = fscanf(fd, "%256s %lf[^\n]", param, &value);
+        result = fscanf(fd, "%127s %[^\n]", param, svalue);
         
         if(param[0] != '#' && result != 2 && !feof(fd)){
             fprintf(stderr, "CMCONFIG: Parameter-value pair number %d was illegal. (%d)", count, result);
@@ -169,7 +170,7 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
 
         // Convert to a lower-case string
         strlower(param);
-
+        ftarget = NULL;
         if(param[0] == '#'){
             // This is a comment.  Do nothing.
         }else if(streq(param, "tref")){
@@ -226,21 +227,30 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
             return -1;
         }
         
-        // Test for in-bounds
-        if(value > vmax || value < vmin){
-            fprintf(stderr, "CMCONFIG: Value for \"%s\" was out of bounds [%f, %f]: %f\n", param, vmin, vmax, value);
-            fclose(fd);
-            return -1;
+        // If there was a result
+        if(ftarget){
+            // Convert to float
+            if(1 != sscanf(svalue, "%lf", &value)){
+                fprintf(stderr, "CMCONFIG: Non-numeric value for param (%s): %s\n", param, svalue);
+                fclose(fd);
+                return -1;
+            // Test for in-bounds
+            }else if(value > vmax || value < vmin){
+                fprintf(stderr, "CMCONFIG: Value for \"%s\" was out of bounds [%f, %f]: %f\n", param, vmin, vmax, value);
+                fclose(fd);
+                return -1;
+            }
+            // Everything is fine - assign the value
+            *ftarget = value;
+            fprintf(stdout, "%s = %lf\n", param, value);
         }
-        // Everything is fine - assign the value
-        *ftarget = value;
     }
     // We're done loading the file
     fclose(fd);
     
     // Enforce a few rules:
-    if(bat->Vfull < bat->Vdisch){
-        fprintf(stderr, "CMCONFIG: The full voltage is greater than the discharge voltage!\n");
+    if(bat->Vfull_ref < bat->Vdisch_ref){
+        fprintf(stderr, "CMCONFIG: The full voltage is less than the discharge voltage!\n");
         return -1;
     }else if(bat->tc < bat->ts){
         fprintf(stderr, "CMCONFIG: WARNING * The sample interval is longer than the battery time constant.\n");
@@ -358,6 +368,8 @@ int cmupdate(cmbat_t *bat){
         
         bat->Q = 0.;
         bat->E = 0.;
+    
+        bat->chargestate = chargestate;
     }
     
     // Reset the signal statistics accumulators

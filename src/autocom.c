@@ -279,42 +279,45 @@ acerror_t acmessage(acdev_t *dev, char *text, acloglevel_t level){
 
 
 acerror_t acdata(acdev_t *dev, cmbat_t *bat){
-    struct timeval now;
+    struct timespec now;
     FILE *dfd;
     double ipeak;
     
-    gettimeofday(&now, NULL);
+    clock_gettime(CLOCK_REALTIME, &now);
     
     dfd = fopen(dev->datafile, "a");
     // If the open failed
     if(!dfd){
         sprintf(stemp, "ACDATA: Failed to open/create file: %s", dev->datafile);
-        acmessage(stemp);
+        acmessage(dev, stemp, ACLOG_ESSENTIAL);
         return ACERR_LSD_FILE;
     }
     // Is the data file empty?
     // If so, write a header.
     if(ftell(dfd) == 0){
         fprintf(dfd, "# Battery monitor data file: %s\n", dev->datafile);
-        fprintf(dfd, "# Created: %d\n", now->tv_sec);
+        fprintf(dfd, "# Created: %d\n", now.tv_sec);
         fprintf(dfd, "# Time is in seconds since the epoch.\n");
         fprintf(dfd, "# Charge states are (U)nknown, (E)mpty, (D)ischarging, (C)harging, and (F)ull.\n");
-        fprintf(dfd, "# Time(s)  Terminal_Voltage(V)  Open_Circuit_Voltage(V)  Mean_Current(A)  Peak_Current(A)  Charge(Ahr)  SOC(-)  Charge_State(-)\n");
+        fprintf(dfd, "# Time(s)  Temperature(K)  Terminal_Voltage(V)  Open_Circuit_Voltage(V)  Mean_Current(A)  Peak_Current(A)  Charge(Ahr)  Energy(J)  SOC(-)  Charge_State(-)\n");
     }
     
     // Detect whether the maximum or minimum current should be used
     if(bat->Istat.mean >= 0)
         ipeak = bat->Istat.max;
     else
-        ipeak = bat->Istate.min;
-    fprintf(dfd, "%d\t%7.3f\t%7.3f\t%+7.3f\t%+7.3f\t%+12.3f\t%7.3f\t%c\n",\
-        now->tv_sec,\
+        ipeak = bat->Istat.min;
+    fprintf(dfd, "%d\t%7.2f%7.3f\t%7.3f\t%+7.3f\t%+7.3f\t%+14.6e\t%+14.6e\t%7.3f\t%c\n",\
+        now.tv_sec,\
+        bat->T,\
         bat->Vt,\
         bat->Voc,\
         bat->Istat.mean,\
         ipeak,\
         bat->Q/3600,\
-        (char) bat->chargestate);
+        bat->E,\
+        bat->soc,\
+        (char)(0xFF & bat->chargestate));
     fclose(dfd);
 }
 
@@ -419,7 +422,7 @@ acerror_t acconfig(acdev_t *dev, char *filename){
     }
     
     for(count=1; !feof(fd); count++){
-        result = fscanf(fd, "%256s %256[^\n]", param, value);
+        result = fscanf(fd, "%127s %127[^\n]", param, value);
         
         if(param[0] != '#' && result != 2 && !feof(fd)){
             sprintf(stemp, "ACCONFIG: Parameter-value pair number %d was illegal. (%d)", count, result);
