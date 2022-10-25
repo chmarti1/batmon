@@ -32,8 +32,8 @@ int main(int argc, char* argv[]){
     acdev_t dev;
     int err;
     cmbat_t bat;
-    double data[25];
-    double  I=0,
+    double data[25];    // Buffer for raw data
+    double  I=0,        // Temporary variables for averages
             V=0, 
             T=0, 
             I1,
@@ -42,9 +42,9 @@ int main(int argc, char* argv[]){
             I2, 
             V2, 
             T2;
-    struct timespec start, stop;
-    int ii;
-    char bad_f;
+    unsigned int ii,    // Counter
+        data_every;     // How often to log a data entry?
+    char bad_f;         // status flag - data read failed
     char message[AC_STRLEN];
     
     // Set the go flag high BEFORE registering the exit signals.
@@ -66,6 +66,9 @@ int main(int argc, char* argv[]){
         acmessage(&dev, "BMSVC: Failed to parse  - aborting.", ACLOG_ESSENTIAL);
         return -1;
     }
+    
+    // Calculate the number of steps between data records
+    data_every = (unsigned int) (dev->tdata * 60);
     
     /**************************/
     /* OPEN DEVICE CONNECTION */
@@ -104,6 +107,7 @@ int main(int argc, char* argv[]){
     /******************************/
     /* START THE MEASUREMENT LOOP */
     /******************************/
+    ii = data_every;
     while(go_f){
         // The "bad" flag indicates whether the data should be trusted
         bad_f = 0;
@@ -137,6 +141,13 @@ int main(int argc, char* argv[]){
         
         // Update the battery model
         cmstep(&bat, I, V, T);
+        
+        // Track the number of samples since the last data log
+        ii--;
+        if(ii==0){
+            acdata(&dev, &bat);
+            ii = data_every;
+        }
     }
 
     // Halt the data stream

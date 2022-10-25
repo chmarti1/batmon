@@ -408,7 +408,8 @@ acerror_t acconfig(acdev_t *dev, char *filename){
     dev->temp_slope = 0;
     dev->loglevel = ACLOG_LOW;
     dev->aistr_active = 0;
-       
+    dev->tdata = 300.;
+    
     // Open the configuration file
     fd = fopen(filename, "r");
     if(!fd){
@@ -466,10 +467,14 @@ acerror_t acconfig(acdev_t *dev, char *filename){
             else if(streq(value, "high"))
                 dev->loglevel = ACLOG_HIGH;
             else{
+                sprintf(stemp, "ACCONFIG: Problem in configuration file: %s\n", filename);
+                acmessage(dev, stemp, ACLOG_ESSENTIAL);
                 sprintf(stemp, "ACCONFIG: loglevel must be [none, low, high, debug].  Found: %32s", value);
                 acmessage(dev, stemp, ACLOG_ESSENTIAL);
             }
         }else{
+            sprintf(stemp, "ACCONFIG: Problem in configuration file: %s\n", filename);
+            acmessage(dev, stemp, ACLOG_ESSENTIAL);
             sprintf(stemp, "ACCONFIG: Unrecognized parameter: %60s", param);
             acmessage(dev, stemp, ACLOG_ESSENTIAL);
             fclose(fd);
@@ -479,6 +484,8 @@ acerror_t acconfig(acdev_t *dev, char *filename){
         // If the value is floating point
         if(ftarget){
             if(1 != sscanf(value, "%lf", ftarget)){
+                sprintf(stemp, "ACCONFIG: Problem in configuration file: %s\n", filename);
+                acmessage(dev, stemp, ACLOG_ESSENTIAL);
                 sprintf(stemp, "ACCONFIG: Non-numerical value for param: %60s", param);
                 acmessage(dev, stemp, ACLOG_ESSENTIAL);
                 sprintf(stemp, "          value: %70s", value);
@@ -491,6 +498,17 @@ acerror_t acconfig(acdev_t *dev, char *filename){
             strcpy(starget, value);
     }
     fclose(fd);
+    // Error checking
+    
+    // Log data no more often than 1 second
+    if(dev->tdata < 1.){
+        sprintf(stemp, "ACCONFIG: Problem in configuration file: %s\n", filename);
+        acmessage(dev, stemp, ACLOG_ESSENTIAL);
+        sprintf(stemp, "ACCONFIG: Increasing tdata to be one second. Found: %f\n", dev->tdata);
+        acmessage(dev, stemp, ACLOG_ESSENTIAL);
+        dev->tdata = 1.;
+    }
+    
     return done;
 }
 

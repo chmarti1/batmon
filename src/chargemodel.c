@@ -253,12 +253,18 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
     // Initialize the histories
     tf_init(&bat->_vttf);
     tf_init(&bat->_qtf);
+    tf_init(&bat->_etf);
     // The terminal voltage TF will be set when cmstep() is called.
     // Go ahead and set the charge integrator - use Tustin/trapezoidal
     bat->_qtf.b[1] = 0.5 * bat->ts;
     bat->_qtf.b[0] = 0.5 * bat->ts;
     bat->_qtf.a[1] = 1;
     bat->_qtf.a[0] = -1;
+    // Set the power integrator - use Testin/trapezoidal integration
+    bat->_etf.b[1] = 0.5 * bat->ts;
+    bat->_etf.b[0] = 0.5 * bat->ts;
+    bat->_etf.a[1] = 1;
+    bat->_etf.a[0] = -1;
     
     // Initialize the signal statistics
     stat_reset(&bat->Istat);
@@ -295,6 +301,7 @@ double cmr2(cmbat_t *bat){
 
 int cmupdate(cmbat_t *bat){
     double T;
+    cmcharge_t chargestate;
     // Use the mean temperature
     T = bat->Tstat.mean;
     // Update the Vfull values
@@ -316,17 +323,47 @@ int cmupdate(cmbat_t *bat){
     // Update the soc
     bat->soc = (bat->Voc - bat->Vdisch)/(bat->Vfull - bat->Vdisch);
     // Clamp the soc and case out the charge state
+    // If the SOC is greater than 1, the state is either full or discharging
     if(bat->soc >= 1.){
-        bat->chargestate = CM_CHARGE_FULL;
-        bat->soc = 1;
-    }else if(bat->soc<= 0.){
-        bat->chargestate = CM_CHARGE_EMPTY;
-        bat->soc = 0;
-    }else if(bat->I > 0.){
-        bat->chargestate = CM_CHARGE_DISCHARGING;
-    }else if(bat->I < 0.){
-        bat->chargestate = CM_CHARGE_CHARGING;
+        bat->soc = 1.;
+        if(bat->I > 0)
+            chargestate = CM_CHARGE_DISCHARGING;
+        else
+            chargestate = CM_CHARGE_FULL;
+    // If the soc is less than 0, the state is either empty or charging
+    }else if(bat->soc <= 0.){
+        bat->soc = 0.;
+        if(bat->I < 0)
+            chargestate = CM_CHARGE_CHARGING;
+        else
+            chargestate = CM_CHARGE_EMPTY;
+    // If the soc is not saturated, then the state is charging or discharging
+    }else if(bat->I > 0)
+        chargestate = CM_CHARGE_DISCHARGING;
+    else
+        chargestate = CM_CHARGE_CHARGING;
+    
+    // If the charge state has changed, reset the energy and charge
+    // integrators!
+    if(chargestate != bat->chargestate){
+        bat->_qtf.x[0] = 0.;
+        bat->_qtf.x[1] = 0.;
+        bat->_qtf.u[0] = 0.;
+        bat->_qtf.u[1] = 0.;
+        
+        bat->_etf.x[0] = 0.;
+        bat->_etf.x[1] = 0.;
+        bat->_etf.u[0] = 0.;
+        bat->_etf.u[1] = 0.;
+        
+        bat->Q = 0.;
+        bat->E = 0.;
     }
+    
+    // Reset the signal statistics accumulators
+    stat_reset(&bat->Istat);
+    stat_reset(&bat->Vstat);
+    stat_reset(&bat->Tstat);
     
     return 0;
 }
@@ -350,6 +387,8 @@ int cmstep(cmbat_t *bat, double I, double V, double T){
 
     // Update the charge integral
     bat->Q = tf_eval(&bat->_qtf, I);
+    // Update the energy integral
+    bat->E = tf_eval(&bat->_etf, I*V);
 
     // Calculate current terminal resistance values (depends on T)
     R0 = cmr1(bat);
@@ -364,9 +403,6 @@ int cmstep(cmbat_t *bat, double I, double V, double T){
 
     // Update the open circuit voltage calculation
     bat->Voc = V + tf_eval(&bat->_vttf, I);
-
-    // Check for a state change that might prompt the application to
-    // call for an update.
     
     return 0;
 }

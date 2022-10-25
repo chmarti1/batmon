@@ -136,6 +136,7 @@ typedef struct _cmbat_t {
     double T;           // Last measured temperature
     double Voc;         // last open-circuit voltage calculation
     double Q;           // last coulomb count
+    double E;           // last power integral
     // Signal statistics
     cmstat_t Istat;     // Current
     cmstat_t Vstat;     // Terminal voltage
