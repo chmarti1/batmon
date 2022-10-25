@@ -134,7 +134,7 @@ typedef struct _acdev_t {
 } acdev_t;
 
 
-/* ACMESSAGE_SEND - Log and send a message
+/* ACMESSAGE - Log a message
  *  acmessage_send pushes text to a log location.  If no log file has 
  * been configured for the device, then stdout is used.  If the 
  * dev->logfile path is defined, it attempts to open the file, append to
@@ -150,6 +150,13 @@ typedef struct _acdev_t {
  * values will always be sent.
  */
 acerror_t acmessage(acdev_t *dev, char *text, acloglevel_t level);
+
+/* ACERROR - Construct a meaningful message based on the error number
+ *  Writes an error message no longer than AC_STRLEN to target to 
+ * describe the error found in err.  If the error is unrecognized, an
+ * appropriate message is written.
+ */
+void acerror(acerror_t err, char *target);
 
 /* ACCONFIG - Load a device configuration file
  * 

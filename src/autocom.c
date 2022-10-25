@@ -276,6 +276,88 @@ acerror_t acmessage(acdev_t *dev, char *text, acloglevel_t level){
     return ACERR_NONE;
 }
 
+
+// DEFINE A NEW STRUCT for passing data to acdata
+// STAT the file in advance to see if it exists.  If not, 
+// create a new file and prepend a header.
+acerror_t acdata(acdev_t *dev){
+    struct timeval now;
+    FILE *dfd;
+    
+    gettimeofday(&now, NULL);
+    
+    
+}
+
+void acerror(acerror_t err, char *target){
+    switch(err){
+    case ACERR_NONE:
+        strcpy("ACERR_NONE: There was no error.",target);
+    break;
+    // Generic Errors
+    case ACERR_DEV_NOT_OPEN:
+        strcpy("ACERR_DEV_NOT_OPEN: Operation failed because the device connection is not open.",target);
+    break;
+    case ACERR_BAD_CHECKSUM:
+        strcpy("ACERR_BAD_CHECKSUM: Communication failed with a bad checksum.",target);
+    break;
+    case ACERR_CORRUPT_BUFFER:
+        strcpy("ACERR_CORRUPT_BUFFER: Unexpected corruption of the communication buffer!",target);
+    break;
+    case ACERR_TX_FAILURE:
+        strcpy("ACERR_TX_FAILURE: Failed while transmitting to the device.",target);
+    break;
+    case ACERR_RX_FAILURE:
+        strcpy("ACERR_RX_FAILURE: Failed to receive a reply from the device.",target);
+    break;
+    case ACERR_RX_LENGTH:
+        strcpy("ACERR_RX_LENGTH: The device replied with an illegal packet size!",target);
+    break;
+    case ACERR_PARAM_ERROR:
+        strcpy("ACERR_PARAM_ERROR: An AC function was called with an illegal parameter.",target);        
+    break;
+
+    // Configuration errors
+    case ACERR_CONFIG_FILE:
+        strcpy("ACERR_CONFIG_FILE: Could not open the configuration file.",target);
+    break;
+    case ACERR_CONFIG_SYNTAX:
+        strcpy("ACERR_CONFIG_SYNTAX: There was a syntax error in the configuration file.",target);
+    break;
+    case ACERR_LSD_FILE:
+        strcpy("ACERR_LSD_FILE: Failed to write to the log, stat, or data file.",target);    
+    break;
+
+    // Init/Open Errors
+    case ACERR_DEV_ALREADY_OPEN:
+        strcpy("ACERR_DEV_ALREADY_OPEN: Open failed - device connection already open.",target);
+    break;
+    case ACERR_OPEN_FAILED:
+        strcpy("ACERR_OPEN_FAILED: Failed to open the device connection.",target);
+    break;
+    case ACERR_CONFIG_FAILED:
+        strcpy("ACERR_CONFIG_FAILED: Initial configuration of the device failed.",target);    
+    break;
+    
+    // Stream Errors
+    case ACERR_AICONFIG_FAILED:
+        strcpy("ACERR_AICONFIG_FAILED: Failed to configure the device for analog input streaming.",target);
+    break;
+    case ACERR_AISTART_FAILED:
+        strcpy("ACERR_AISTART_FAILED: Failed to start an analog input stream.",target);
+    break;
+    case ACERR_AIREAD_FAILED:
+        strcpy("ACERR_AISTART_FAILED: Failed to read from an analog input stream.",target);
+    break;
+    case ACERR_AISTOP_FAILED:
+        strcpy("ACERR_AISTART_FAILED: Failed to stop an analog input stream.",target);
+    break;
+    default:
+        sprintf(target, "Unrecognized error code: %02x", err);
+    }
+}
+
+
 acerror_t acconfig(acdev_t *dev, char *filename){
     int result, count, err;
     char param[AC_STRLEN], value[AC_STRLEN];
@@ -758,9 +840,7 @@ acerror_t acstream_start(acdev_t *dev, double sample_hz, uint8_t samples_per_pac
     txbuffer[9] = 0x0C;             // 48MHz clock, 12.8bit resolution
     //txbuffer[9] = 0x04;             // 4MHz clock, 12.8bit resolution
     txbuffer[10] = (uint8_t) (sampleroll & 0x00FF);
-    txbuffer[11] = (uint8_t) (sampleroll >> 8);// The roll value is 
-                                    // hard-coded based on a 4MHz clock
-                                    // a 600Hz sample rate
+    txbuffer[11] = (uint8_t) (sampleroll >> 8);
     
     // Set the channels
     txbuffer[12] = ACPIN_CS + AC_EIO_OFFSET;    // Current
@@ -793,10 +873,7 @@ acerror_t acstream_start(acdev_t *dev, double sample_hz, uint8_t samples_per_pac
     
     txbuffer[1] = 0xA8;
     err = xmit(dev,1,4);
-    
-    
-    printf("STREAM_START reply:\n");
-    buffer_dump(rxbuffer);
+
     
     if(err){
         acmessage(dev, "ACSTREAM_START: Communication failed while starting the measurement.", ACLOG_MEDIUM);
@@ -830,9 +907,6 @@ acerror_t acstream_read(acdev_t *dev, double *data){
     */
     result = LJUSB_StreamTO(
             dev->handle, rxbuffer, nbytes, 5000);
-    
-    printf("STREAM_READ reply:\n");
-    buffer_dump(rxbuffer);
     
     if(result != nbytes){
         sprintf(stemp, "ACSTREAM_READ: Expected %d bytes, got %d.", 64, result);
@@ -886,9 +960,6 @@ acerror_t acstream_stop(acdev_t *dev){
     
     txbuffer[1] = 0xB0;
     err = xmit(dev,1,4);
-    
-    printf("STREAM_STOP reply:\n");
-    buffer_dump(rxbuffer);
     
     if(err){
         acmessage(dev, "ACSTREAM_STOP: Communication failed while stopping the measurement.", ACLOG_MEDIUM);

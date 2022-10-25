@@ -114,26 +114,27 @@ void strlower(char *target){
 
 int cmconfig(cmbat_t *bat, char *filename, double ts){
     int result, count, err;
-    char param[AC_STRLEN];
+    char param[CM_STRLEN];
     double value, vmax, vmin;
     double *ftarget;
     FILE *fd = NULL;
-    acerror_t done = ACERR_NONE;
 
     // First, initialize the bat struct
         // Resistance model
-    bat->R1 = 0;        // Initial terminal resistance at Tref
-    bat->R2 = 0;        // Rise in terminal resistance at reference temperature
+    bat->R1_ref = 0;        // Initial terminal resistance at Tref
+    bat->R1_T = 0;
+    bat->R2_ref = 0;        // Rise in terminal resistance at reference temperature
+    bat->R2_T = 0;
     // Time parameters
     bat->tc = 1.;       // Time constant for resistance relaxation
     bat->ts = ts;       // Sample rate
     // Temperature parameters
     bat->Tref = 298.15;      // reference temperature in (Kelvin)
     // Voltage parameters
-    bat->Vfull = 12.9;  // OCV at full charge at Tref
+    bat->Vfull_ref = 12.9;  // OCV at full charge at Tref
     bat->Vfull_c1 = 0.; //   temperature coefficient 1 (Kelvin)
     bat->Vfull_c2 = 0.; //   temperature coefficient 2 (Kelvin)
-    bat->Vdisch = 11.55;// OCV at fully discharged at Tref
+    bat->Vdisch_ref = 11.55;// OCV at fully discharged at Tref
     bat->Vdisch_c1 = 0.;//   temperature coefficient 1 (Kelvin)
     bat->Vdisch_c2 = 0.;//   temperature coefficient 2 (Kelvin)
     // Measurements/states
@@ -144,7 +145,6 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
     bat->Q = 0.;        // Coloumb count
     bat->soc = 1.;         // State of charge estimate
     
-    bat->chargestate = CM_CHARGE_UNKNOWN;
     bat->uptime = 0;
 
     // Open the configuration file
@@ -155,13 +155,12 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
     }
     
     for(count=1; !feof(fd); count++){
-        result = fscanf(fd, "%256s %f[^\n]", param, &value);
+        result = fscanf(fd, "%256s %lf[^\n]", param, &value);
         
         if(param[0] != '#' && result != 2 && !feof(fd)){
             fprintf(stderr, "CMCONFIG: Parameter-value pair number %d was illegal. (%d)", count, result);
             
             fprintf(stderr, "          param: %70s", param);
-            fprintf(stderr, "          value: %70s", value);
             fclose(fd);
             return -1;
         }else if(result == 0){
@@ -178,19 +177,19 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
             vmax = 350.;
             vmin = 250.;
         }else if(streq(param, "r1")){
-            ftarget = &bat->R1;
+            ftarget = &bat->R1_ref;
             vmax = 1000.;
             vmin = 0.;
-        }else if(streq(param, "r1_temp")){
-            ftarget = &bat->R1_temp;
+        }else if(streq(param, "r1_t")){
+            ftarget = &bat->R1_T;
             vmax = 1000.;
             vmin = -1000.;
         }else if(streq(param, "r2")){
-            ftarget = &bat->R2;
+            ftarget = &bat->R2_ref;
             vmax = 1000.;
             vmin = 0.;
-        }else if(streq(param, "r2_temp")){
-            ftarget = &bat->R2_temp;
+        }else if(streq(param, "r2_t")){
+            ftarget = &bat->R2_T;
             vmax = 1000.;
             vmin = -1000.;
         }else if(streq(param, "tc")){
@@ -198,7 +197,7 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
             vmax = 1000.;
             vmin = 0.;
         }else if(streq(param, "vfull")){
-            ftarget = &bat->Vfull;
+            ftarget = &bat->Vfull_ref;
             vmax = 1000.;
             vmin = 0.;
         }else if(streq(param, "vfull_c1")){
@@ -210,7 +209,7 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
             vmax = 1000.;
             vmin = -1000.;
         }else if(streq(param, "vdisch")){
-            ftarget = &bat->Vdisch;
+            ftarget = &bat->Vdisch_ref;
             vmax = 1000.;
             vmin = 0.;
         }else if(streq(param, "vdisch_c1")){
@@ -262,42 +261,10 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
     bat->_qtf.a[0] = -1;
     
     // Initialize the signal statistics
-    stat_reset(&bat->istat);
-    stat_reset(&bat->vstat);
-    stat_reset(&bat->tstat);
+    stat_reset(&bat->Istat);
+    stat_reset(&bat->Vstat);
+    stat_reset(&bat->Tstat);
     return 0;
-}
-
-
-/* CMVFULL, CMVDISCH - calculate fully (dis)charged OCV in volts.
- *  Returns the fully (dis)charged open-circuit voltage in volts.
- *  BAT - the battery model struct
- * 
- * Uses the last measured temperature registered with CMSTEP() to 
- * compensate for temperature.
- */
-double cmvfull(cmbat_t *bat){
-    double value;
-    value = bat->Vfull;
-    if(bat->Vfull_c1){
-        value += bat->Vfull_c1 * (1./bat->T - 1./bat->Tref);
-    }
-    if(bat->Vfull_c2){
-        value += bat->Vfull_c2 * bat->Vfull_c2 * (1./bat->T/bat->T - 1./bat->Tref/bat->Tref);
-    }
-    return value;
-}
-
-double cmvdisch(cmbat_t *bat){
-    double value;
-    value = bat->Vdisch;
-    if(bat->Vdisch_c1){
-        value += bat->Vdisch_c1 * (1./bat->T - 1./bat->Tref);
-    }
-    if(bat->Vdisch_c2){
-        value += bat->Vdisch_c2 * bat->Vdisch_c2 * (1./bat->T/bat->T - 1./bat->Tref/bat->Tref);
-    }
-    return value;
 }
 
 
@@ -310,18 +277,18 @@ double cmvdisch(cmbat_t *bat){
  */
 double cmr1(cmbat_t *bat){
     double value;
-    value = bat->R1;
-    if(bat->R1_temp){
-        value += bat->R1_temp * (bat->T - bat->Tref);
+    value = bat->R1_ref;
+    if(bat->R1_T){
+        value += bat->R1_T * (bat->T - bat->Tref);
     }
     return value;
 }
 
 double cmr2(cmbat_t *bat){
     double value;
-    value = bat->R2;
-    if(bat->R2_temp){
-        value += bat->R2_temp * (bat->T - bat->Tref);
+    value = bat->R2_ref;
+    if(bat->R2_T){
+        value += bat->R2_T * (bat->T - bat->Tref);
     }
     return value;
 }
@@ -329,25 +296,39 @@ double cmr2(cmbat_t *bat){
 int cmupdate(cmbat_t *bat){
     double T;
     // Use the mean temperature
-    T = bat->tstat.mean;
+    T = bat->Tstat.mean;
     // Update the Vfull values
-    bat->Vfull_T = bat->Vfull;
+    bat->Vfull = bat->Vfull_ref;
     if(bat->Vfull_c1){
-        bat->Vfull_T += bat->Vfull_c1 * (1./T - 1./bat->Tref);
+        bat->Vfull += bat->Vfull_c1 * (1./T - 1./bat->Tref);
     }
     if(bat->Vfull_c2){
-        bat->Vfull_T += bat->Vfull_c2 * bat->Vfull_c2 * (1./T/T - 1./bat->Tref/bat->Tref);
+        bat->Vfull += bat->Vfull_c2 * bat->Vfull_c2 * (1./T/T - 1./bat->Tref/bat->Tref);
     }
     // Update the Vdisch values
-    bat->Vdisch_T = bat->Vdisch;
+    bat->Vdisch = bat->Vdisch_ref;
     if(bat->Vdisch_c1){
-        bat->Vdisch_T += bat->Vdisch_c1 * (1./T - 1./bat->Tref);
+        bat->Vdisch += bat->Vdisch_c1 * (1./T - 1./bat->Tref);
     }
     if(bat->Vdisch_c2){
-        bat->Vdisch_T += bat->Vdisch_c2 * bat->Vdisch_c2 * (1./T/T - 1./bat->Tref/bat->Tref);
+        bat->Vdisch += bat->Vdisch_c2 * bat->Vdisch_c2 * (1./T/T - 1./bat->Tref/bat->Tref);
     }
-    // Update the charge state
+    // Update the soc
+    bat->soc = (bat->Voc - bat->Vdisch)/(bat->Vfull - bat->Vdisch);
+    // Clamp the soc and case out the charge state
+    if(bat->soc >= 1.){
+        bat->chargestate = CM_CHARGE_FULL;
+        bat->soc = 1;
+    }else if(bat->soc<= 0.){
+        bat->chargestate = CM_CHARGE_EMPTY;
+        bat->soc = 0;
+    }else if(bat->I > 0.){
+        bat->chargestate = CM_CHARGE_DISCHARGING;
+    }else if(bat->I < 0.){
+        bat->chargestate = CM_CHARGE_CHARGING;
+    }
     
+    return 0;
 }
 
 
@@ -363,9 +344,9 @@ int cmstep(cmbat_t *bat, double I, double V, double T){
     bat->T = T;
 
     // Update the signal statistics
-    stat_datum(&bat->istat, I);
-    stat_datum(&bat->vstat, V);
-    stat_datum(&bat->tstat, T);
+    stat_datum(&bat->Istat, I);
+    stat_datum(&bat->Vstat, V);
+    stat_datum(&bat->Tstat, T);
 
     // Update the charge integral
     bat->Q = tf_eval(&bat->_qtf, I);
@@ -392,7 +373,7 @@ int cmstep(cmbat_t *bat, double I, double V, double T){
 
 
 void cmreset(cmbat_t *bat){
-    stat_reset(&bat->istat);
-    stat_reset(&bat->vstat);
-    stat_reset(&bat->tstat);
+    stat_reset(&bat->Istat);
+    stat_reset(&bat->Vstat);
+    stat_reset(&bat->Tstat);
 }

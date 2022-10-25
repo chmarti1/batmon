@@ -17,8 +17,8 @@
  * includes a linear temperature coefficient for the terminal 
  * resistances, so 
  * 
- *      R1(T) = R1(Tref) + R1_temp * (T - Tref)
- *      R2(T) = R2(Tref) + R2_temp * (T - Tref)
+ *      R1(T) = R1(Tref) + R1_T * (T - Tref)
+ *      R2(T) = R2(Tref) + R2_T * (T - Tref)
  * 
  * The time constant is presumed not to change with temperature.
  * 
@@ -45,13 +45,31 @@
  * voltage extrapolated to infinite temperature.  It is calculated from
  * VFULL and VDISCH, which are the full-charge voltages at Tref.
  * 
+ *** USE ***
+ * (1) First, initialize the battery model using the CMCONFIG() 
+ * function.  This will read in a configuration file containing the 
+ * various coefficient values described above.  It has a mandatory 
+ * argument, ts, which determines the sample interval in seconds.  This
+ * is the interval at which the battery terminal voltage, current, and
+ * temperature will be measured and fed to the model.
+ * 
+ * (2) The application starts a data acquisition process.  The process
+ * should be timed to produce measurements at intervals consistent with 
+ * the sample period configured above.  This should be hardware timed 
+ * and NOT software timed (i.e. do not use usleep()).
+ * 
+ * (3) At regular intervals ts seconds apart, CMSTEP() is called to feed
+ * new terminal voltage, current, and temperature measurements to the
+ * battery model.  
+ * 
+ * (4) At less frequent intervals, 
  */
  
 #ifndef __chargemodel_h__
 #define __chargemodel_h__
 
 #define CMHIST 2
-
+#define CM_STRLEN 128
 
 // The CMTF_T struct models a dynamic model.  This is used for coulomb 
 // counter and the dynamic terminal model.  It is a discrete-time 
@@ -63,24 +81,6 @@ typedef struct _cmtf_t {
     double u[CMHIST];       // Model input history
 } cmtf_t;
 
-typedef enum _cmevent_t {
-    CM_EVENT_NONE = 0x00;   // Nothing to report
-    // Current-based events
-    CM_EVENT_IUP = 0x11;    // Current changed from negative to positive
-    CM_EVENT_IDOWN = 0x12;  // Current changed from positive to negative
-    CM_EVENT_DIDTUP = 0x13; // There was a rapid increase in current
-    CM_EVENT_DIDTDOWN = 0x14;// .. rapid decrease in current
-    CM_EVENT_IHIGH = 0x15;  // Current rose above Ihigh
-    CM_EVENT_ILOW = 0x16;
-    // Voltage-based events
-    CM_EVENT_DVDTUP = 0x23; // Rapid positive change in voltage
-    CM_EVENT_DVDTDOWN = 0x24;// Rapid negative change in voltage
-    CM_EVENT_VHIGH = 0x25;  // The terminal voltage rose above Vhigh
-    CM_EVENT_VLOW = 0x26;   // The terminal voltage dropped below Vlow
-    // Temperature-based events
-    CM_EVENT_THIGH = 0x35;  // The temperature rose above Thigh
-    CM_EVENT_TLOW = 0x36;   // The temperature fell below Tlow
-} cmevent_t;
 
 typedef enum _cmcharge_t {
     CM_CHARGE_UNKNOWN = 'U',
@@ -111,8 +111,10 @@ typedef struct _cmstat_t {
 typedef struct _cmbat_t {
     // ** Statically configured model parameters **
     // Resistance model
-    double R1;          // Initial terminal resistance at reference temperature
-    double R2;          // Rise in terminal resistance at reference temperature
+    double R1_ref;      // Initial terminal resistance at reference temperature
+    double R1_T;        // R1 temperature coefficient
+    double R2_ref;      // Rise in terminal resistance at reference temperature
+    double R2_T;        // R2 temnperature coefficient
     // Time parameters
     double tc;      // Time constant for resistance relaxation
     double ts;      // Sample interval
@@ -120,10 +122,10 @@ typedef struct _cmbat_t {
     double Tref;        // reference temperature in (Kelvin)
     // Voltage parameters
     //  V = v0 * (1 + c1/T + (c2/T)*(c2/T))
-    double Vfull;       // OCV at full charge at Tref
+    double Vfull_ref;   // OCV at full charge at Tref
     double Vfull_c1;    //   temperature coefficient 1 (Kelvin)
     double Vfull_c2;    //   temperature coefficient 2 (Kelvin)
-    double Vdisch;      // OCV at fully discharged at Tref
+    double Vdisch_ref;  // OCV at fully discharged at Tref
     double Vdisch_c1;   //   temperature coefficient 1 (Kelvin)
     double Vdisch_c2;   //   temperature coefficient 2 (Kelvin)
     
@@ -135,20 +137,21 @@ typedef struct _cmbat_t {
     double Voc;         // last open-circuit voltage calculation
     double Q;           // last coulomb count
     // Signal statistics
-    cmstat_t istat;     // Current
-    cmstat_t vstat;     // Terminal voltage
-    cmstat_t tstat;     // Temperature
+    cmstat_t Istat;     // Current
+    cmstat_t Vstat;     // Terminal voltage
+    cmstat_t Tstat;     // Temperature
     
     // ** parameters updated by CMUPDATE() **
     double soc;         // State of charge estimate
-    double Vfull_T;     // OCV at full charge at T (calculated)
-    double Vdisch_T;    // OCV at fully discharged at T (calculated)
+    double Vfull;       // OCV at full charge at T (calculated)
+    double Vdisch;      // OCV at fully discharged at T (calculated)
     cmcharge_t chargestate; // ENUM establishing the current operating mode
     
     // ** Quasi-private state structs **
     // Dynamic models
     cmtf_t _vttf;
     cmtf_t _qtf;
+    cmtf_t _etf;
     
 } cmbat_t;
 
@@ -253,14 +256,33 @@ double cmsoc(cmbat_t *bat);
 /* CMSTEP - updates all battery model parameters with a new measurement
  * 
  * Accepts the terminal current and the terminal voltage as inputs. 
+ * Updates the following public struct parameters:
+ * 
+ * uptime   --  integer, number of sample intervals since init
+ * Vt       --  double, mean terminal voltage over last cycle
+ * I        --  double, mean current over the last 60Hz cycle
+ * T        --  double, mean temperature in K
+ * Voc      --  double, latest OCV calculation
+ * Q        --  double, coulumb counter integral since last reset
+ * 
+ */
+int cmstep(cmbat_t *bat, double I, double V, double T);
+
+/* CMUPDATE - Called periodically to update the params not maintained by
+ *  CMSTEP.
+ * 
+ * Accepts the terminal current and the terminal voltage as inputs. 
  * Returns 1 if the charge state has changed since the last update. 
  * Otherwise, returns 0.
  * 
  * The coloumb count in the bat.Q member is reset on the next call after
  * a change of charge state, so its value should be read immediately if
  * it is needed.
+ * 
+ * Returns a Charge Model EVENT, which passes important events back to
+ * the application.
  */
-int cmstep(cmbat_t *bat, double I, double V, double T);
+int cmupdate(cmbat_t *bat);
 
 /* CMRESET - resets the istat, vstat, and tstat statistics structs
  * 
