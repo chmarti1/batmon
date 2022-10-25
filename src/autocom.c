@@ -277,16 +277,45 @@ acerror_t acmessage(acdev_t *dev, char *text, acloglevel_t level){
 }
 
 
-// DEFINE A NEW STRUCT for passing data to acdata
-// STAT the file in advance to see if it exists.  If not, 
-// create a new file and prepend a header.
-acerror_t acdata(acdev_t *dev){
+
+acerror_t acdata(acdev_t *dev, cmbat_t *bat){
     struct timeval now;
     FILE *dfd;
+    double ipeak;
     
     gettimeofday(&now, NULL);
     
+    dfd = fopen(dev->datafile, "a");
+    // If the open failed
+    if(!dfd){
+        sprintf(stemp, "ACDATA: Failed to open/create file: %s", dev->datafile);
+        acmessage(stemp);
+        return ACERR_LSD_FILE;
+    }
+    // Is the data file empty?
+    // If so, write a header.
+    if(ftell(dfd) == 0){
+        fprintf(dfd, "# Battery monitor data file: %s\n", dev->datafile);
+        fprintf(dfd, "# Created: %d\n", now->tv_sec);
+        fprintf(dfd, "# Time is in seconds since the epoch.\n");
+        fprintf(dfd, "# Charge states are (U)nknown, (E)mpty, (D)ischarging, (C)harging, and (F)ull.\n");
+        fprintf(dfd, "# Time(s)  Terminal_Voltage(V)  Open_Circuit_Voltage(V)  Mean_Current(A)  Peak_Current(A)  Charge(Ahr)  SOC(-)  Charge_State(-)\n");
+    }
     
+    // Detect whether the maximum or minimum current should be used
+    if(bat->Istat.mean >= 0)
+        ipeak = bat->Istat.max;
+    else
+        ipeak = bat->Istate.min;
+    fprintf(dfd, "%d\t%7.3f\t%7.3f\t%+7.3f\t%+7.3f\t%+12.3f\t%7.3f\t%c\n",\
+        now->tv_sec,\
+        bat->Vt,\
+        bat->Voc,\
+        bat->Istat.mean,\
+        ipeak,\
+        bat->Q/3600,\
+        (char) bat->chargestate);
+    fclose(dfd);
 }
 
 void acerror(acerror_t err, char *target){

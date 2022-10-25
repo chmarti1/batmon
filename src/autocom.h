@@ -12,6 +12,7 @@
 #include <labjackusb.h>
 #include <stdio.h>
 #include <stdint.h>
+#include "chargemodel.h"
 
 // Analog stream prameters
 #define AC_CHANNELS             3
@@ -150,6 +151,18 @@ typedef struct _acdev_t {
  * values will always be sent.
  */
 acerror_t acmessage(acdev_t *dev, char *text, acloglevel_t level);
+
+/* ACDATA - Log a data entry
+ *  The ACDATA() function is responsible for tending to the data file.
+ * If the file does not exist, it creates the file with a header.  
+ * Each time ACDATA is called, it appends a line to the file with the
+ * system time in seconds (since the epoch) and appropriate whitespace
+ * separated columns.
+ * 
+ * If the operation fails, the ACERR_LSD_FILE error condition is 
+ * returned.
+ */
+acerror_t acdata(acdev_t *dev, cmbat_t *bat);
 
 /* ACERROR - Construct a meaningful message based on the error number
  *  Writes an error message no longer than AC_STRLEN to target to 
