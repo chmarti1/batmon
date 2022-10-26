@@ -282,43 +282,76 @@ acerror_t acdata(acdev_t *dev, cmbat_t *bat){
     struct timespec now;
     FILE *dfd;
     double ipeak;
+    acerror_t done;
     
     clock_gettime(CLOCK_REALTIME, &now);
     
-    dfd = fopen(dev->datafile, "a");
-    // If the open failed
-    if(!dfd){
-        sprintf(stemp, "ACDATA: Failed to open/create file: %s", dev->datafile);
-        acmessage(dev, stemp, ACLOG_ESSENTIAL);
-        return ACERR_LSD_FILE;
-    }
-    // Is the data file empty?
-    // If so, write a header.
-    if(ftell(dfd) == 0){
-        fprintf(dfd, "# Battery monitor data file: %s\n", dev->datafile);
-        fprintf(dfd, "# Created: %d\n", now.tv_sec);
-        fprintf(dfd, "# Time is in seconds since the epoch.\n");
-        fprintf(dfd, "# Charge states are (U)nknown, (E)mpty, (D)ischarging, (C)harging, and (F)ull.\n");
-        fprintf(dfd, "# Time(s)  Temperature(K)  Terminal_Voltage(V)  Open_Circuit_Voltage(V)  Mean_Current(A)  Peak_Current(A)  Charge(Ahr)  Energy(J)  SOC(-)  Charge_State(-)\n");
+    done = ACERR_NONE;
+    // Deal with the DATA file
+    if(dev->datafile[0] != '\0'){
+        dfd = fopen(dev->datafile, "a");
+        // If the open failed
+        if(!dfd){
+            sprintf(stemp, "ACDATA: Failed to open/create data file: %s", dev->datafile);
+            acmessage(dev, stemp, ACLOG_ESSENTIAL);
+            done = ACERR_LSD_FILE;
+        }else{
+            // Is the data file empty?
+            // If so, write a header.
+            if(ftell(dfd) == 0){
+                fprintf(dfd, "# Battery monitor data file: %s\n", dev->datafile);
+                fprintf(dfd, "# Created: %ld\n", (long int) now.tv_sec);
+                fprintf(dfd, "# Time is in seconds since the epoch.\n");
+                fprintf(dfd, "# Charge states are (U)nknown, (E)mpty, (D)ischarging, (C)harging, and (F)ull.\n");
+                fprintf(dfd, "# Time(s)  Temperature(K)  Terminal_Voltage(V)  Open_Circuit_Voltage(V)  Mean_Current(A)  Peak_Current(A)  Charge(Ahr)  Energy(J)  SOC(-)  Charge_State(-)\n");
+            }
+            
+            // Detect whether the maximum or minimum current should be used
+            if(bat->Istat.mean >= 0)
+                ipeak = bat->Istat.max;
+            else
+                ipeak = bat->Istat.min;
+            fprintf(dfd, "%ld\t%7.2f%7.3f\t%7.3f\t%+7.3f\t%+7.3f\t%+14.6e\t%+14.6e\t%7.3f\t%c\n",\
+                (long int) now.tv_sec,\
+                bat->T,\
+                bat->Vt,\
+                bat->Voc,\
+                bat->Istat.mean,\
+                ipeak,\
+                bat->Q/3600,\
+                bat->E,\
+                bat->soc,\
+                (char)(0xFF & bat->chargestate));
+            fclose(dfd);
+        }
     }
     
-    // Detect whether the maximum or minimum current should be used
-    if(bat->Istat.mean >= 0)
-        ipeak = bat->Istat.max;
-    else
-        ipeak = bat->Istat.min;
-    fprintf(dfd, "%d\t%7.2f%7.3f\t%7.3f\t%+7.3f\t%+7.3f\t%+14.6e\t%+14.6e\t%7.3f\t%c\n",\
-        now.tv_sec,\
-        bat->T,\
-        bat->Vt,\
-        bat->Voc,\
-        bat->Istat.mean,\
-        ipeak,\
-        bat->Q/3600,\
-        bat->E,\
-        bat->soc,\
-        (char)(0xFF & bat->chargestate));
-    fclose(dfd);
+    // Deal with the STAT file
+    if(dev->statfile[0] != '\0'){
+        dfd = fopen(dev->statfile, "w");
+        // If the open failed
+        if(!dfd){
+            sprintf(stemp, "ACDATA: Failed to open/create status file: %s", dev->statfile);
+            acmessage(dev, stemp, ACLOG_ESSENTIAL);
+            done = ACERR_LSD_FILE;
+        }else{
+            fprintf(dfd, "{\n");
+            fprintf(dfd, "\"uptime_steps\": %ld,\n", bat->uptime);
+            fprintf(dfd, "\"temperature_kelvin\": %7.2f,\n", bat->Tstat.mean);
+            fprintf(dfd, "\"current_amps\": %+7.3f,\n", bat->Istat.mean);
+            fprintf(dfd, "\"current_max_amps\": %+7.3f,\n", bat->Istat.max);
+            fprintf(dfd, "\"current_min_amps\": %+7.3f,\n", bat->Istat.min);
+            fprintf(dfd, "\"terminal_voltage\": %7.3f,\n", bat->Vt);
+            fprintf(dfd, "\"open_circuit_voltage\": %7.3f,\n", bat->Voc);
+            fprintf(dfd, "\"full_voltage\": %7.3f,\n", bat->Vfull);
+            fprintf(dfd, "\"discharged_voltage\": %7.3f,\n", bat->Vdisch);
+            fprintf(dfd, "\"charge_amphr\": %+14.6e,\n", bat->Q/3600.);
+            fprintf(dfd, "\"energy_joules\": %+14.6e,\n", bat->E);
+            fprintf(dfd, "\"state_of_charge\": %7.3f,\n", bat->soc);
+            fprintf(dfd,"}");
+            fclose(dfd);
+        }
+    }
 }
 
 void acerror(acerror_t err, char *target){
@@ -877,7 +910,6 @@ acerror_t acstream_start(acdev_t *dev, double sample_hz, uint8_t samples_per_pac
     dev->tsample = ((double) sampleroll * 256) / AC_AICLOCK_HZ;
     dev->Nsample = samples_per_packet;
    
-    printf("SAMPLEROLL: %d\n", sampleroll);
     // First, configure the stream
     // Use the STREAM CONFIG command
     txbuffer[1] = 0xF8;             // Long format
@@ -902,13 +934,7 @@ acerror_t acstream_start(acdev_t *dev, double sample_hz, uint8_t samples_per_pac
     txbuffer[16] = 30;                          // Temperature
     txbuffer[17] = 31;                          //
     
-    printf("STREAM_CONFIG cmd:\n");
-    buffer_dump(txbuffer);
-    
-    err = xmit(dev,1,8);
-    
-    printf("STREAM_CONFIG reply:\n");
-    buffer_dump(rxbuffer);
+    err = xmit(dev, 1, 8);
     
     if(err){
         acmessage(dev, "ACSTREAM_START: Communication failed while configuring the measurement.", ACLOG_MEDIUM);

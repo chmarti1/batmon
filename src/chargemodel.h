@@ -131,6 +131,8 @@ typedef struct _cmbat_t {
     
     // ** parameters updated by CMSTEP() **
     unsigned long int uptime;   // Number of CMSTEP() calls
+    double R1;          // Initial terminal resistance at T
+    double R2;          // Rise in terminal resistance at T
     double Vt;          // Last terminal voltage measured
     double I;           // Last measured current
     double T;           // Last measured temperature

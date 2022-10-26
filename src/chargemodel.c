@@ -242,7 +242,6 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
             }
             // Everything is fine - assign the value
             *ftarget = value;
-            fprintf(stdout, "%s = %lf\n", param, value);
         }
     }
     // We're done loading the file
@@ -312,6 +311,7 @@ double cmr2(cmbat_t *bat){
 int cmupdate(cmbat_t *bat){
     double T;
     cmcharge_t chargestate;
+    int done;
     // Use the mean temperature
     T = bat->Tstat.mean;
     // Update the Vfull values
@@ -355,6 +355,7 @@ int cmupdate(cmbat_t *bat){
     
     // If the charge state has changed, reset the energy and charge
     // integrators!
+    done = 0;
     if(chargestate != bat->chargestate){
         bat->_qtf.x[0] = 0.;
         bat->_qtf.x[1] = 0.;
@@ -370,6 +371,8 @@ int cmupdate(cmbat_t *bat){
         bat->E = 0.;
     
         bat->chargestate = chargestate;
+        
+        done = 1;
     }
     
     // Reset the signal statistics accumulators
@@ -377,13 +380,12 @@ int cmupdate(cmbat_t *bat){
     stat_reset(&bat->Vstat);
     stat_reset(&bat->Tstat);
     
-    return 0;
+    return done;
 }
 
 
 int cmstep(cmbat_t *bat, double I, double V, double T){
-    double Vfull, Vdisch, Rinf, R0, tratio;
-    cmcharge_t last;
+    double Rinf, R0, tratio;
     
     bat->uptime ++;
 
@@ -403,8 +405,15 @@ int cmstep(cmbat_t *bat, double I, double V, double T){
     bat->E = tf_eval(&bat->_etf, I*V);
 
     // Calculate current terminal resistance values (depends on T)
-    R0 = cmr1(bat);
-    Rinf = R0 + cmr2(bat);
+    bat->R1 = bat->R1_ref;
+    if(bat->R1_T)
+        bat->R1 += bat->R1_T * (bat->T - bat->Tref);
+    bat->R2 = bat->R2_ref;
+    if(bat->R2_T)
+        bat->R2 += bat->R2_T * (bat->T - bat->Tref);
+        
+    R0 = bat->R1;
+    Rinf = R0 + bat->R2;
     // Ratio of the time constant to the sample interval
     tratio = 2*bat->tc/bat->ts;
     // Update the TF coefficients
