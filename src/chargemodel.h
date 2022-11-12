@@ -61,8 +61,6 @@
  * (3) At regular intervals ts seconds apart, CMSTEP() is called to feed
  * new terminal voltage, current, and temperature measurements to the
  * battery model.  
- * 
- * (4) At less frequent intervals, 
  */
  
 #ifndef __chargemodel_h__

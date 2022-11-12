@@ -1,9 +1,0 @@
-logfile         test.log
-statfile        test.stat
-
-# Try out a comment
-current_slope   100.
-current_zero    1.25
-voltage_slope   7.2
-voltage_zero    0.
-# Let's try a comment here

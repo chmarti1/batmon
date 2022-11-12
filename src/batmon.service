@@ -4,7 +4,7 @@ Description=Battery Monitor Service
 [Service]
 Type=simple
 Restart=always
-ExecStart=/usr/bin/batmon
+ExecStart=/usr/local/bin/batmon
 
 [Install]
 WantedBy=multi-user.target

@@ -1,193 +1,198 @@
-#include "chargemodel.h"
-#include "autocom.h"
+/* BMSVC
+ * 
+ * Battery Monitor Service
+ * 
+ */
+
 #include <stdio.h>
+#include <string.h>
+#include "autocom.h"
+#include "chargemodel.h"
 #include <time.h>
 #include <signal.h>
 
-#define CONFIG "/etc/batmon.conf"
-#define TS_MIN  0.01
-#define TS_MAX  10.0
 
-char go_f;      // A global flag indicating whether a TERM signal was received
-acdev_t dev;    // Device struct is gloal so the handler can access it
+#define ACCONFIG    "/etc/batmon/com.conf"
+#define BATCONFIG   "/etc/batmon/bat.conf"
+#define STRLEN      128
+#define SAMPLE_HZ   600.
+#define SAMPLE_N    5
 
-// A TERM signal handler function
-void term_handler(int signum){
-    acmessage_send(&dev, "Caught SIGTERM");
+// A state flag that signals it's OK to continue program execution
+char go_f;
+
+
+
+void halt(int signum){
     go_f = 0;
 }
 
-// A helper function for writing to the data file
-int datawrite(acdev_t *dev, char type){
-    time_t now;
-    FILE *fd;
-    static char datafile_f = 1;
-    now = time(NULL);
-    if(!(fd = fopen(dev->datafile,"a"))){
-        if(datafile_f){
-            acmessage_send(dev, "Failed to write datum to data file:");
-            acmessage_send(dev, dev->datafile);
-            acmessage_send(dev, "This message will not be repeated.");
-            datafile_f = 0;
-        }
-        return -1;
-    }
-    // [time]E S cs Imean Istd Imax Imin Vt Voc Q T
-    fprintf(fd, "[%11d]%c %c%8.4f%8.2f%8.2f%8.2f%8.2f%8.4f%8.4f%14.6e%6.1f\n",\
-        (unsigned int) now,
-        type,
-        (char) dev->battery.chargestate,
-        dev->battery.soc, 
-        dev->battery.istat.mean,
-        dev->battery.istat.stdev,
-        dev->battery.istat.max,
-        dev->battery.istat.min,
-        dev->battery.Vt,
-        dev->battery.Voc,
-        dev->battery.Q,
-        dev->battery.tstat.mean);
-    fclose(fd);
-    return 0;
-}
 
-int statwrite(acdev_t *dev){
-    time_t now;
-    FILE *fd;
-    char stemp[128];
-    static char statfile_f = 1;
-    now = time(NULL);
+int main(int argc, char* argv[]){
+    acdev_t dev;
+    int err;
+    cmbat_t bat;
+    double data[25];    // Buffer for raw data
+    double  I=0,        // Temporary variables for averages
+            V=0, 
+            T=0, 
+            I1,
+            V1,
+            T1,
+            I2, 
+            V2, 
+            T2;
+    unsigned int step_count,    // Counter
+        log_count,
+        log_steps,      // How many steps between log entries?
+        clear_logs;    // How many log entries between data updates?
+    char bad_f;         // status flag - data read failed
+    char message[AC_STRLEN];
     
-    if(!(fd = fopen(dev->statfile,"w"))){
-        if(statfile_f){
-            acmessage_send(dev, "Failed to write to the stat file:");
-            acmessage_send(dev, dev->statfile);
-            acmessage_send(dev, "This message will not be repeated.");
-            statfile_f = 0;
-        }
-        return -1;
-    }
-    strftime(stemp, 128, "%Y-%m-%d %H:%M:%S UTC%z", localtime(&now));
-    fprintf(fd, "Updated: %s\n", stemp);
-    fprintf(fd, "Terminal Voltage (V)\n  last:%.4f\n  mean:%.4f\n  stdev:%.4f\n",
-        dev->battery.Vt,
-        dev->battery.vstat.mean,
-        dev->battery.vstat.stdev);
-    fprintf(fd, "Current (A)\n  last:%.2f\n  mean:%.2f\n  stdev:%.2f\n  max:%.2f\n  min:%.2f\n",
-        dev->battery.I,
-        dev->battery.istat.mean,
-        dev->battery.istat.stdev,
-        dev->battery.istat.max,
-        dev->battery.istat.min);
-    fprintf(fd, "Temperature (K)\n  mean:%.1f\n",
-        dev->battery.tstat.mean);
-    fprintf(fd, "Open Circuit Voltage (V)\n  last:%.4f\n",
-        dev->battery.Voc);
-    fprintf(fd, "State of charge\n  last:%.4f\n",
-        dev->battery.soc);
-    fprintf(fd, "Charge since last state change:\n  Coulombs: %f\n  Amp-hr: %f\n",
-        dev->battery.Q,
-        dev->battery.Q / 3600);
-    fprintf(fd, "Charge state: ");
-    switch(dev->battery.chargestate){
-    case CM_CHARGE_EMPTY:
-        fprintf(fd, "EMPTY\n");
-    break;
-    case CM_CHARGE_FULL:
-        fprintf(fd, "FULL\n");
-    break;
-    case CM_CHARGE_NONFULL:
-        fprintf(fd, "NONFULL\n");
-    break;
-    case CM_CHARGE_UNKNOWN:
-    default:
-        fprintf(fd, "UNKNOWN\n");
-    break;
-    }
-    fclose(fd);
-    return 0;
-}
-
-int main(int argc, char *argv[]){
-    char stemp[AC_STRLEN];
-    unsigned int packets_per_datum,     // Number of stream packets between data entries
-                packet_count;           // Keep track of the number of packets so far
-    int ii;
-    double buffer[AC_SAMPLES_PER_PACKET];
-    double I, Vt, T;
-    
-    // Parse the configuration file
-    if(acconfig(&dev, CONFIG)){
-        fprintf(stderr, "FATAL: Failed to parse configuration file.\n");
-        return -1;
-    }
-    
-    // Check the sample intervals for sanity
-    if(dev.battery.ts < TS_MIN || dev.battery.ts > TS_MAX){
-        acmessage_set(stderr);
-        sprintf(stemp, "FATAL: Sample interval (ts) was out of bounds (%f, %f): %lf", TS_MIN, TS_MAX, dev.battery.ts);
-        acmessage_send(&dev, stemp);
-        return -1;
-    }
-    // Calculate the packets per datum
-    packets_per_datum = (unsigned int) (dev.tdata / (dev.battery.ts * AC_SAMPLES_PER_PACKET));
-    // Update tdata to reflect the rounding
-    dev.tdata = (double) (packets_per_datum * dev.battery.ts * AC_SAMPLES_PER_PACKET);
-    // Log the startup time
-    acmessage_send(&dev, "BATMON started.");
-    
-    // Open the connection
-    if(acopen(&dev)){
-        acmessage_send(&dev, "FATAL: Failed to connect to device.");
-        return -1;
-    }
-    
-    // Start the data stream
-    if(acstream_start(&dev)){
-        acmessage_send(&dev, "FATAL: Failed to start data stream.");
-        acclose(&dev);
-        return -1;
-    }
-    
-    // Set up the handler for the TERM signal
-    signal(SIGTERM, term_handler);
-    
-    // Initialize the relevant counter(s)
-    packet_count = 0;
-    
-    // Start the service loop
-    // It will exit with a TERM signal
+    // Set the go flag high BEFORE registering the exit signals.
     go_f = 1;
+    // Register interrupt signals
+    signal(SIGINT, &halt);
+    signal(SIGTERM, &halt);
+    
+    /*********************/
+    /* OPEN CONFIG FILES */
+    /*********************/
+    err = (int) acconfig(&dev, ACCONFIG);
+    if(err){
+        printf("BMSVC: Received error (%02x) while parsing com configuration file: %s\n", err, ACCONFIG);
+        return -1;
+    }
+    err = cmconfig(&bat, BATCONFIG, 1./60.);
+    if(err){
+        acmessage(&dev, "BMSVC: Failed to parse " BATCONFIG " - aborting.", ACLOG_ESSENTIAL);
+        return -1;
+    }
+    
+    // Calculate the number of steps between data records
+    log_steps = (unsigned int) (dev.tdata * 60);    // The steps are at 60Hz
+    // For now, the clear_logs parameter is hard-coded
+    // This may be configurable in the future.
+    // Archive the data every 10 thousand entries
+    // If tdata is 300 seconds, this is a little over 1 month of data.
+    clear_logs = 10000;
+    
+    acmessage(&dev, "Starting service.", ACLOG_LOW);
+    
+    /**************************/
+    /* OPEN DEVICE CONNECTION */
+    /**************************/
+    err = acopen(&dev);
+    if(err){
+        acerror(err, message);
+        acmessage(&dev, message, ACLOG_ESSENTIAL);
+        acmessage(&dev, "Fatal error. Aborting.", ACLOG_ESSENTIAL);
+        return -1;
+    }
+
+    /*************************/
+    /* INITIALIZE THE DEVICE */
+    /*************************/
+    // Make sure there is not an active stream
+    // Errors are acceptable here.
+    err = acstream_stop(&dev);
+    // Initialize the device
+    err = acinit(&dev);
+    if(err){
+        acerror(err, message);
+        acmessage(&dev, message, ACLOG_ESSENTIAL);
+        acmessage(&dev, "Fatal error. Aborting.", ACLOG_ESSENTIAL);
+        return -1;
+    }
+    // Start the data stream
+    err = acstream_start(&dev, SAMPLE_HZ, SAMPLE_N);
+    if(err){
+        acerror(err, message);
+        acmessage(&dev, message, ACLOG_ESSENTIAL);
+        acmessage(&dev, "Fatal error. Aborting.", ACLOG_ESSENTIAL);
+        return -1;
+    }
+
+    /******************************/
+    /* START THE MEASUREMENT LOOP */
+    /******************************/
+    step_count = 0;
+    log_count = 0;
     while(go_f){
-        // Read in a packet (blocking)
-        acstream_read(&dev, buffer);
-        packet_count++;
-        // process the new data
-        for(ii = 0; ii<AC_SAMPLES_PER_PACKET; ii++){
-            I = buffer[3*ii];
-            Vt = buffer[3*ii + 1];
-            T = buffer[3*ii + 2];
-            
-            // If the charge state has changed, record the event
-            if(cmstep(&dev.battery, I, Vt, T)){
-                datawrite(&dev, 'E');
-                statwrite(&dev);
-                cmreset(&dev.battery);
-            }
+        // The "bad" flag indicates whether the data should be trusted
+        bad_f = 0;
+        // Average 10 samples gathered at 600Hz.  This averages over a
+        // 60Hz cycle to reject line noise.
+        err = acstream_read(&dev, data);
+        acmean(&dev, data, &I1, &V1, &T1);
+        if(err){
+            bad_f = 1;
+            acmessage(&dev, "ACSTREAM failed.", ACLOG_HIGH);
         }
-        // If this is a datum that should be recorded
-        if(packet_count >= packets_per_datum){
-            // Restart the count
-            packet_count = 0;
-            datawrite(&dev, ' ');
-            statwrite(&dev);
-            cmreset(&dev.battery);
+        err = acstream_read(&dev, data);
+        acmean(&dev, data, &I2, &V2, &T2);
+        if(err){
+            bad_f = 1;
+            acmessage(&dev, "ACSTREAM failed.", ACLOG_HIGH);
+        }
+        
+        // If the stream failed
+        // use the data from the last valid measurement
+        if(bad_f){
+            I = bat.I;
+            V = bat.Vt;
+            T = bat.T;
+        // Otherwise, average the latest measurements
+        }else{
+            I = 0.5*(I1+I2);
+            V = 0.5*(V1+V2);
+            T = 0.5*(T1+T2);
+        }
+        
+        // Update the battery model
+        // If there is a change of charge state, or if the data record 
+        // counter has run out, update the records
+        step_count++;
+        if(cmstep(&bat, I, V, T) || step_count >= log_steps){
+            acdata(&dev, &bat);
+            step_count = 0;
+            log_count ++;
+            // If the log count is at the clear number, move the file
+            if(log_count >= clear_logs){
+                log_count = 0;
+                // Borrow message to construct the archive file name
+                sprintf(message, "%s_old", dev.datafile);
+                if(rename(dev.datafile, message))
+                    acmessage(&dev,"Failed to back up data!", ACLOG_ESSENTIAL);
+                else
+                    acmessage(&dev,"Started a fresh data file.", ACLOG_ESSENTIAL);
+            }
+            
+            // Reset the signal statistics accumulators
+            cmreset(&bat);
+            // If soc < 0.5, raise an alarm
+            if(bat.soc < 0.5)
+                acset(&dev, ACPIN_ALARM, 1);
+            else
+                acset(&dev, ACPIN_ALARM, 0);
+            // Light the red LED if discharging or empty
+            if(bat.chargestate == CM_CHARGE_DISCHARGING || bat.chargestate == CM_CHARGE_EMPTY)
+                acset(&dev, ACPIN_IND0, 1);
+            else
+                acset(&dev, ACPIN_IND0, 0);
+            // Light the first green LED if discharging or charging
+            if(bat.chargestate == CM_CHARGE_DISCHARGING || bat.chargestate == CM_CHARGE_CHARGING)
+                acset(&dev, ACPIN_IND1, 1);
+            else
+                acset(&dev, ACPIN_IND1, 0);
         }
     }
-    acmessage_send(&dev,"BATMON stopping.");
-    // Stop the stream and close
-    acstream_stop(&dev);
-    acclose(&dev);
-    
+
+    acmessage(&dev, "Halting service.", ACLOG_LOW);
+
+    // Halt the data stream
+    err = acstream_stop(&dev);
+    // Close the device connection
+    err = acclose(&dev);
     return 0;
 }
-

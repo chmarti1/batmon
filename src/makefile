@@ -1,26 +1,22 @@
 # Installation target locations
 # Edit these options prior to installation to change options
 # Do not leave trailing / separators
-BIN=/usr/bin
 SYSTEMD=/etc/systemd/system
-HOME=/var/batmon
-CONF=/etc
+HOME=/var/local/batmon
+CONF=/etc/batmon
 
 # Build dependent parameters
-BMCMD=$(BIN)/bmcmd
-BATMON=$(BIN)/batmon
-BMCONF=$(CONF)/batmon.conf
+BIN=/usr/local/bin/batmon
 BMSERVICE=$(SYSTEMD)/batmon.service
 USER=batmon
 
 # Build some dependency lists
 LINK=-lm -llabjackusb
-BINARIES=bmcmd.bin batmon.bin
 
 
-bmsvc.bin: bmsvc.c chargemodel.o autocom.o
+batmon.bin: batmon.c chargemodel.o autocom.o
 	@echo "==> Compiling the batery monitor service binary"
-	gcc -Wall -o bmsvc.bin autocom.o chargemodel.o bmsvc.c -lm -llabjackusb
+	gcc -Wall -o batmon.bin autocom.o chargemodel.o batmon.c -lm -llabjackusb
 
 chargemodel.o: chargemodel.c chargemodel.h
 	@echo "==> Compiling the chargemodel object"
@@ -34,7 +30,7 @@ clean:
 	rm -f *.bin
 	rm -f *.o
 
-install: $(BINARIES)
+install: batmon.bin
 	@echo "==> Installing in the system..."
 	@echo "==> Creating the batmon user and home dir"
 	# Create the bmcmd user and home directory
@@ -43,21 +39,19 @@ install: $(BINARIES)
 
 	@echo "==> Placing the files..."
 	# Install the bmcmd binary
-	cp -f bmcmd.bin $(BMCMD)
-	chown root:root $(BMCMD)
-	chmod 775 $(BMCMD)
-
-	# Install the batmon binary
-	cp -f batmon.bin $(BATMON)
-	chown root:root $(BATMON)
-	chmod 770 $(BATMON)
+	cp -f batmon.bin $(BIN)
+	chown root:root $(BIN)
+	chmod 775 $(BIN)
 
 	# Install the configuration file
-	cp -f batmon.conf $(BMCONF)
-	chown root:batmon $(BMCONF)
+	@echo "==> Placing configuration files"
+	mkdir $(CONF)
+	cp -f *.conf $(CONF)
+	chown -R root:batmon $(CONF)
 
 	# Place the service unit file and start the service
-	cp -f batmon.service $(BMSERVICE)
+	cp -f batmon.service $(HOME)
+	ln -s $(HOME)/batmon.service $(BMSERVICE)
 	systemctl enable batmon.service
 	systemctl start batmon.service
 
@@ -70,13 +64,11 @@ uninstall:
 
 	@echo "==> Removing the files..."
 	# Remove the binaries
-	rm -f $(BMCMD)
-	rm -f $(BATMON)
-	# Delete the configuration file
-	rm -f $(BMCONF)
+	rm -f $(BIN)
+	# Delete the configuration files
+	rm -rf $(CONF)
 
 	@echo "==> Deleting the batmon user, group, and home directory..."
 	# Delete the user, home directory, and group
 	deluser --remove-home $(USER)
-	delgroup $(USER)
 

@@ -283,109 +283,10 @@ int cmconfig(cmbat_t *bat, char *filename, double ts){
 }
 
 
-/* CMR1, CMR2 - calculate the terminal resistances in ohms
- *  Returns R1 and R2 in ohms.
- *  BAT - the battery model struct
- * 
- * Uses the last measured temperature registered with CMSTEP() to 
- * compensate for temperature.
- */
-double cmr1(cmbat_t *bat){
-    double value;
-    value = bat->R1_ref;
-    if(bat->R1_T){
-        value += bat->R1_T * (bat->T - bat->Tref);
-    }
-    return value;
-}
-
-double cmr2(cmbat_t *bat){
-    double value;
-    value = bat->R2_ref;
-    if(bat->R2_T){
-        value += bat->R2_T * (bat->T - bat->Tref);
-    }
-    return value;
-}
-
-int cmupdate(cmbat_t *bat){
-    double T;
-    cmcharge_t chargestate;
-    int done;
-    // Use the mean temperature
-    T = bat->Tstat.mean;
-    // Update the Vfull values
-    bat->Vfull = bat->Vfull_ref;
-    if(bat->Vfull_c1){
-        bat->Vfull += bat->Vfull_c1 * (1./T - 1./bat->Tref);
-    }
-    if(bat->Vfull_c2){
-        bat->Vfull += bat->Vfull_c2 * bat->Vfull_c2 * (1./T/T - 1./bat->Tref/bat->Tref);
-    }
-    // Update the Vdisch values
-    bat->Vdisch = bat->Vdisch_ref;
-    if(bat->Vdisch_c1){
-        bat->Vdisch += bat->Vdisch_c1 * (1./T - 1./bat->Tref);
-    }
-    if(bat->Vdisch_c2){
-        bat->Vdisch += bat->Vdisch_c2 * bat->Vdisch_c2 * (1./T/T - 1./bat->Tref/bat->Tref);
-    }
-    // Update the soc
-    bat->soc = (bat->Voc - bat->Vdisch)/(bat->Vfull - bat->Vdisch);
-    // Clamp the soc and case out the charge state
-    // If the SOC is greater than 1, the state is either full or discharging
-    if(bat->soc >= 1.){
-        bat->soc = 1.;
-        if(bat->I > 0)
-            chargestate = CM_CHARGE_DISCHARGING;
-        else
-            chargestate = CM_CHARGE_FULL;
-    // If the soc is less than 0, the state is either empty or charging
-    }else if(bat->soc <= 0.){
-        bat->soc = 0.;
-        if(bat->I < 0)
-            chargestate = CM_CHARGE_CHARGING;
-        else
-            chargestate = CM_CHARGE_EMPTY;
-    // If the soc is not saturated, then the state is charging or discharging
-    }else if(bat->I > 0)
-        chargestate = CM_CHARGE_DISCHARGING;
-    else
-        chargestate = CM_CHARGE_CHARGING;
-    
-    // If the charge state has changed, reset the energy and charge
-    // integrators!
-    done = 0;
-    if(chargestate != bat->chargestate){
-        bat->_qtf.x[0] = 0.;
-        bat->_qtf.x[1] = 0.;
-        bat->_qtf.u[0] = 0.;
-        bat->_qtf.u[1] = 0.;
-        
-        bat->_etf.x[0] = 0.;
-        bat->_etf.x[1] = 0.;
-        bat->_etf.u[0] = 0.;
-        bat->_etf.u[1] = 0.;
-        
-        bat->Q = 0.;
-        bat->E = 0.;
-    
-        bat->chargestate = chargestate;
-        
-        done = 1;
-    }
-    
-    // Reset the signal statistics accumulators
-    stat_reset(&bat->Istat);
-    stat_reset(&bat->Vstat);
-    stat_reset(&bat->Tstat);
-    
-    return done;
-}
-
 
 int cmstep(cmbat_t *bat, double I, double V, double T){
     double Rinf, R0, tratio;
+    cmcharge_t chargestate;
     
     bat->uptime ++;
 
@@ -424,6 +325,67 @@ int cmstep(cmbat_t *bat, double I, double V, double T){
 
     // Update the open circuit voltage calculation
     bat->Voc = V + tf_eval(&bat->_vttf, I);
+    
+    // Detect SOC
+    bat->Vfull = bat->Vfull_ref;
+    if(bat->Vfull_c1){
+        bat->Vfull += bat->Vfull_c1 * (1./T - 1./bat->Tref);
+    }
+    if(bat->Vfull_c2){
+        bat->Vfull += bat->Vfull_c2 * bat->Vfull_c2 * (1./T/T - 1./bat->Tref/bat->Tref);
+    }
+    // Update the Vdisch values
+    bat->Vdisch = bat->Vdisch_ref;
+    if(bat->Vdisch_c1){
+        bat->Vdisch += bat->Vdisch_c1 * (1./T - 1./bat->Tref);
+    }
+    if(bat->Vdisch_c2){
+        bat->Vdisch += bat->Vdisch_c2 * bat->Vdisch_c2 * (1./T/T - 1./bat->Tref/bat->Tref);
+    }
+    // Update the soc
+    bat->soc = (bat->Voc - bat->Vdisch)/(bat->Vfull - bat->Vdisch);
+    // Clamp the SOC
+    if(bat->soc > 1.)
+        bat->soc = 1;
+    else if(bat->soc < 0.)
+        bat->soc = 0;
+
+    // Update the chargestate
+    // If we haven't accumulated at least 10 current measurements,
+    // don't mess with the charge state
+    if(bat->Istat._N < 10)
+        chargestate = bat->chargestate;
+    // If the battery is discharging
+    else if(bat->Istat.mean > 0){
+        if(bat->soc <= 0.)
+            chargestate = CM_CHARGE_EMPTY;
+        else
+            chargestate = CM_CHARGE_DISCHARGING;
+    // If the battery is charging
+    }else{
+        if(bat->soc >= 1.)
+            chargestate = CM_CHARGE_FULL;
+        else
+            chargestate = CM_CHARGE_CHARGING;
+    }
+    
+    // If the charge state has changed, reset the energy and charge
+    // integrators!
+    if(chargestate != bat->chargestate){
+        bat->_qtf.x[0] = 0.;
+        bat->_qtf.x[1] = 0.;
+        bat->_qtf.u[0] = 0.;
+        bat->_qtf.u[1] = 0.;
+        
+        bat->_etf.x[0] = 0.;
+        bat->_etf.x[1] = 0.;
+        bat->_etf.u[0] = 0.;
+        bat->_etf.u[1] = 0.;
+   
+        bat->chargestate = chargestate;
+        
+        return 1;
+    }
     
     return 0;
 }
