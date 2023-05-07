@@ -21,6 +21,8 @@
 #define AC_EIO_OFFSET           8           // The EIO pins are 8-15, so there is an offset of 8 for the pin numbers.
 #define AC_STRLEN               128         // The longest string length allowed
 
+#define AC_MAXLOG_BYTES         0x800000
+
 typedef enum _acchannel_t {
     ACCHAN_CURRENT = 0,
     ACCHAN_VOLTAGE = 1,

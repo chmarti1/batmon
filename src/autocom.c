@@ -240,6 +240,7 @@ acerror_t acmessage(acdev_t *dev, char *text, acloglevel_t level){
     FILE *lfd;
     char close_f;   // Close the file?
     static char stemp[AC_STRLEN];
+    struct stat lstat;
     
     if(level > dev->loglevel && level >= 0)
         return ACERR_NONE;
@@ -250,7 +251,14 @@ acerror_t acmessage(acdev_t *dev, char *text, acloglevel_t level){
     close_f = 0;
     // If a log file is specified, try to open it
     if(dev->logfile[0]){
-        // If the open operation succeeds
+        // If the logfile exists and is too large, move it
+        // !!> This has not yet been tested
+        if(!stat(dev->logfile, &lstat) && lstat.st_size > AC_MAXLOG_BYTES){
+            sprintf(stemp, "%s_old", dev->logfile);
+            rename(dev->logfile, stemp);
+        }
+        
+        // Try to open/create the log file
         if(lfd = fopen(dev->logfile,"a")){
             // We'll need to remember to close it later
             close_f = 1;
